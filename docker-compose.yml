@@ -1,0 +1,69 @@
+
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gotrue:
+    image: supabase/gotrue:v2.139.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9099:9099"
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9099
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+      JWT_EXP: 3600
+
+  rest:
+    image: postgrest/postgrest:v12.0.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      PGRST_DB_URI: postgres://postgres:postgres@postgres:5432/postgres
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3000
+      - NEXT_PUBLIC_SUPABASE_URL=http://localhost:3001
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV4YW1wbGUiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTY0MTc2NTU5MCwiZXhwIjoxOTI3MzY1NTkwfQ.rjxjgkaKPnPtIcvLHtGZTLDYaerwTM9JXoDNqyME4s0
+    depends_on:
+      - postgres
+      - gotrue
+      - rest
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
