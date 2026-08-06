@@ -13,7 +13,11 @@ export type IconName =
   | "report"
   | "archive"
   | "bell"
-  | "logout";
+  | "logout"
+  | "cpu"
+  | "memory"
+  | "uptime"
+  | "activity";
 
 const paths: Record<IconName, React.ReactNode> = {
   dashboard: (
@@ -109,6 +113,35 @@ const paths: Record<IconName, React.ReactNode> = {
       <line x1="21" y1="12" x2="9" y2="12" />
     </>
   ),
+  cpu: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <line x1="9" y1="1" x2="9" y2="4" />
+      <line x1="15" y1="1" x2="15" y2="4" />
+      <line x1="9" y1="20" x2="9" y2="23" />
+      <line x1="15" y1="20" x2="15" y2="23" />
+      <line x1="1" y1="9" x2="4" y2="9" />
+      <line x1="1" y1="15" x2="4" y2="15" />
+      <line x1="20" y1="9" x2="23" y2="9" />
+      <line x1="20" y1="15" x2="23" y2="15" />
+    </>
+  ),
+  memory: (
+    <>
+      <rect x="3" y="7" width="18" height="10" rx="1" />
+      <line x1="7" y1="17" x2="7" y2="20" />
+      <line x1="12" y1="17" x2="12" y2="20" />
+      <line x1="17" y1="17" x2="17" y2="20" />
+    </>
+  ),
+  uptime: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 16 14" />
+    </>
+  ),
+  activity: <polyline points="2 12 6 12 9 5 13 19 16 12 22 12" />,
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

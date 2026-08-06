@@ -1,9 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { usernameToEmail } from "./username";
 import { signInWithPassword } from "./gotrue";
-import { createSession, endSession } from "./session";
+import { createSession, endSession, setSessionIdCookie } from "./session";
+import { recordAuditEvent, recordSessionStart } from "@/app/lib/tracking/tracking";
 
 export interface LoginFormState {
   error?: string;
@@ -35,6 +37,32 @@ export async function loginAction(
   }
 
   await createSession(result);
+
+  const headerList = await headers();
+  const forwardedFor = headerList.get("x-forwarded-for");
+  const ipAddress = forwardedFor?.split(",")[0]?.trim() ?? headerList.get("x-real-ip") ?? "unknown";
+  const userAgent = headerList.get("user-agent") ?? "unknown";
+
+  const sessionId = await recordSessionStart({
+    accessToken: result.access_token,
+    userId: result.user.id,
+    email: result.user.email,
+    role,
+    ipAddress,
+    userAgent,
+  });
+
+  if (sessionId) {
+    await setSessionIdCookie(sessionId);
+    await recordAuditEvent({
+      accessToken: result.access_token,
+      userId: result.user.id,
+      email: result.user.email,
+      role,
+      action: "Logged in",
+    });
+  }
+
   redirect(role === "admin" ? "/admin" : "/personnel");
 }
 
