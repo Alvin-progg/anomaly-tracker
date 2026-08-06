@@ -6,6 +6,7 @@ import { getAccessToken } from "@/app/lib/auth/session";
 import { usernameToEmail } from "@/app/lib/auth/username";
 import { createUser, setUserBanned, updateUser } from "@/app/lib/auth/admin";
 import { recordAuditEvent } from "@/app/lib/tracking/tracking";
+import { getSecuritySettings, getPasswordPolicyError } from "@/app/lib/config/security";
 import type { AppRole } from "@/app/lib/auth/gotrue";
 
 export interface UserFormState {
@@ -42,6 +43,9 @@ export async function createUserAction(_prevState: UserFormState, formData: Form
     return { error: "Please fill in all fields." };
   }
 
+  const policyError = getPasswordPolicyError(password, await getSecuritySettings());
+  if (policyError) return { error: policyError };
+
   const email = usernameToEmail(username);
   const result = await createUser({ email, password, fullName, role, banned });
 
@@ -74,6 +78,11 @@ export async function updateUserAction(_prevState: UserFormState, formData: Form
 
   if (!id || !fullName || !username || !role) {
     return { error: "Please fill in all fields." };
+  }
+
+  if (password) {
+    const policyError = getPasswordPolicyError(password, await getSecuritySettings());
+    if (policyError) return { error: policyError };
   }
 
   const email = usernameToEmail(username);

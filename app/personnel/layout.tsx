@@ -1,10 +1,11 @@
 import { IdleTimeoutProvider } from "@/app/lib/auth/idle-timeout";
-import { authEnv } from "@/app/lib/auth/env";
+import { getSecuritySettings } from "@/app/lib/config/security";
 import { AppShell } from "@/app/components/layout/app-shell";
 
-export default function PersonnelLayout({ children }: LayoutProps<"/personnel">) {
+export default async function PersonnelLayout({ children }: LayoutProps<"/personnel">) {
+  const { sessionTimeoutMinutes } = await getSecuritySettings();
   return (
-    <IdleTimeoutProvider idleMinutes={authEnv.idleTimeoutMinutes}>
+    <IdleTimeoutProvider idleMinutes={sessionTimeoutMinutes}>
       <AppShell role="personnel">{children}</AppShell>
     </IdleTimeoutProvider>
   );
