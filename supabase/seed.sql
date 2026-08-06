@@ -1,8 +1,12 @@
--- Seeds the two Phase 1 test accounts directly into GoTrue's schema.
+-- Seeds the Phase 1 admin test account directly into GoTrue's schema.
 --
 -- Runs automatically via the Supabase CLI (wired by [db.seed] sql_paths in config.toml):
 -- on `supabase start` against a fresh volume, or on `supabase db reset`. No manual step
 -- needed — the CLI runs this after its own migrations have created the `auth` schema.
+--
+-- Personnel accounts are no longer seeded here — create them through the admin's User
+-- Account Management screen (/admin/users) instead, which is the real path now that it
+-- exists (app/admin/users/).
 --
 -- Before trusting the column list below against a GoTrue version other than the one
 -- pinned by the current CLI release, verify it against the running container:
@@ -16,7 +20,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$
 DECLARE
   admin_id uuid := gen_random_uuid();
-  personnel_id uuid := gen_random_uuid();
   seed_password text := 'ChangeMe123!';
 BEGIN
   -- GoTrue scans confirmation_token, recovery_token, email_change*, phone_change*, and
@@ -36,13 +39,6 @@ BEGIN
       now(), '{"provider":"email","providers":["email"],"role":"admin"}'::jsonb, '{}'::jsonb,
       now(), now(),
       '', '', '', '', '', '', '', ''
-    ),
-    (
-      '00000000-0000-0000-0000-000000000000', personnel_id, 'authenticated', 'authenticated',
-      'personnel@raao.local', crypt(seed_password, gen_salt('bf')),
-      now(), '{"provider":"email","providers":["email"],"role":"personnel"}'::jsonb, '{}'::jsonb,
-      now(), now(),
-      '', '', '', '', '', '', '', ''
     );
 
   INSERT INTO auth.identities (
@@ -51,11 +47,6 @@ BEGIN
     (
       gen_random_uuid(), admin_id, admin_id::text,
       jsonb_build_object('sub', admin_id::text, 'email', 'admin@raao.local'),
-      'email', now(), now()
-    ),
-    (
-      gen_random_uuid(), personnel_id, personnel_id::text,
-      jsonb_build_object('sub', personnel_id::text, 'email', 'personnel@raao.local'),
       'email', now(), now()
     );
 END $$;
