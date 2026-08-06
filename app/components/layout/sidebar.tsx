@@ -11,7 +11,13 @@ function isActiveHref(pathname: string, href: string): boolean {
   return href === "/admin" || href === "/personnel" ? pathname === href : pathname.startsWith(href);
 }
 
-export function Sidebar({ role }: { role: AppRole }) {
+export function Sidebar({
+  role,
+  enabledModules,
+}: {
+  role: AppRole;
+  enabledModules?: Record<string, boolean>;
+}) {
   const pathname = usePathname();
   const nav = navForRole(role);
 
@@ -38,6 +44,21 @@ export function Sidebar({ role }: { role: AppRole }) {
       <nav className="flex-1 overflow-y-auto p-2">
         {nav.map((item) => {
           const active = isActiveHref(pathname, item.href);
+          const enabled = enabledModules ? (enabledModules[item.module] ?? true) : true;
+
+          if (!enabled) {
+            return (
+              <div
+                key={item.href}
+                title="Disabled by your System Administrator"
+                className="flex items-center gap-2.5 w-full px-3 py-2.5 mb-0.5 rounded-md text-[13px] border-l-[3px] border-l-transparent text-white/30 cursor-not-allowed"
+              >
+                <Icon name={item.icon} className="opacity-40" />
+                {item.label}
+              </div>
+            );
+          }
+
           return (
             <Link
               key={item.href}

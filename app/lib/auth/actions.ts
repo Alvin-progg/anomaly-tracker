@@ -6,6 +6,7 @@ import { usernameToEmail } from "./username";
 import { signInWithPassword } from "./gotrue";
 import { createSession, endSession, setSessionIdCookie } from "./session";
 import { recordAuditEvent, recordSessionStart } from "@/app/lib/tracking/tracking";
+import { isModuleEnabledForPersonnel } from "@/app/lib/permissions/permissions";
 
 export interface LoginFormState {
   error?: string;
@@ -34,6 +35,12 @@ export async function loginAction(
   const role = result.user.app_metadata?.role;
   if (role !== "admin" && role !== "personnel") {
     return { error: "Account is not fully configured. Contact the System Administrator." };
+  }
+
+  // Admin login can never be disabled — this check only runs for personnel, and
+  // module_permissions has no admin row for it to even check against.
+  if (role === "personnel" && !(await isModuleEnabledForPersonnel("login"))) {
+    return { error: "Login is currently disabled for your role. Contact the System Administrator." };
   }
 
   await createSession(result);
