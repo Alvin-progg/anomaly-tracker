@@ -7,6 +7,8 @@ import { signInWithPassword } from "./gotrue";
 import { createSession, endSession, setSessionIdCookie } from "./session";
 import { recordAuditEvent, recordSessionStart } from "@/app/lib/tracking/tracking";
 import { isModuleEnabledForPersonnel } from "@/app/lib/permissions/permissions";
+import { getSecuritySettings } from "@/app/lib/config/security";
+import { getLockoutRemainingMinutes, recordFailedLoginAttempt, resetLoginAttempts } from "./login-attempts";
 
 export interface LoginFormState {
   error?: string;
@@ -26,9 +28,17 @@ export async function loginAction(
   }
 
   const email = usernameToEmail(username);
+
+  const lockedMinutes = await getLockoutRemainingMinutes(email);
+  if (lockedMinutes !== null) {
+    return { error: `Account temporarily locked. Try again in ${lockedMinutes} minute${lockedMinutes === 1 ? "" : "s"}.` };
+  }
+
   const result = await signInWithPassword(email, password);
 
   if ("error" in result) {
+    const security = await getSecuritySettings();
+    await recordFailedLoginAttempt(email, security.maxFailedLoginAttempts, security.lockoutDurationMinutes);
     return { error: INVALID_CREDENTIALS_MESSAGE };
   }
 
@@ -43,6 +53,7 @@ export async function loginAction(
     return { error: "Login is currently disabled for your role. Contact the System Administrator." };
   }
 
+  await resetLoginAttempts(email);
   await createSession(result);
 
   const headerList = await headers();
