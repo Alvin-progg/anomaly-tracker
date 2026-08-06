@@ -17,7 +17,10 @@ export type IconName =
   | "cpu"
   | "memory"
   | "uptime"
-  | "activity";
+  | "activity"
+  | "search"
+  | "plus"
+  | "edit";
 
 const paths: Record<IconName, React.ReactNode> = {
   dashboard: (
@@ -142,6 +145,24 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   activity: <polyline points="2 12 6 12 9 5 13 19 16 12 22 12" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </>
+  ),
+  plus: (
+    <>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </>
+  ),
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

@@ -17,6 +17,9 @@ export function Btn({
   icon,
   href,
   className,
+  onClick,
+  type = "button",
+  disabled,
 }: {
   children: ReactNode;
   variant?: BtnVariant;
@@ -24,8 +27,11 @@ export function Btn({
   icon?: ReactNode;
   href?: string;
   className?: string;
+  onClick?: () => void;
+  type?: "button" | "submit";
+  disabled?: boolean;
 }) {
-  const classes = `inline-flex items-center gap-1.5 rounded-md font-semibold whitespace-nowrap transition-opacity hover:opacity-85 ${
+  const classes = `inline-flex items-center gap-1.5 rounded-md font-semibold whitespace-nowrap transition-opacity hover:opacity-85 disabled:opacity-50 disabled:cursor-not-allowed ${
     small ? "px-3 py-1 text-xs" : "px-4 py-2 text-[13px]"
   } ${variantClasses[variant]} ${className ?? ""}`;
 
@@ -39,7 +45,7 @@ export function Btn({
   }
 
   return (
-    <button className={classes}>
+    <button type={type} onClick={onClick} disabled={disabled} className={classes}>
       {icon}
       {children}
     </button>
