@@ -2,7 +2,7 @@
 -- lightweight auth audit trail (login/logout events), read via PostgREST with
 -- the signed-in user's own JWT so RLS enforces who can see what. Writes happen
 -- on login/logout (app/lib/auth/actions.ts, app/lib/auth/session.ts); reads
--- happen from app/admin/dashboard-content.tsx (admin-only).
+-- happen from app/admin/dashboard-content.tsx and app/admin/audit/page.tsx (admin-only).
 
 create table public.user_sessions (
   id uuid primary key default gen_random_uuid(),
