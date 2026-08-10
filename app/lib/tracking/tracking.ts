@@ -80,6 +80,8 @@ export async function recordAuditEvent(params: {
   role: string;
   action: string;
   details?: string;
+  /** Omit to fall back to the column default, 'Authentication'. */
+  module?: string;
 }): Promise<void> {
   try {
     await fetch(`${authEnv.restUrl}/audit_log`, {
@@ -89,6 +91,7 @@ export async function recordAuditEvent(params: {
         user_id: params.userId,
         email: params.email,
         role: params.role,
+        module: params.module,
         action: params.action,
         details: params.details,
       }),
@@ -96,6 +99,39 @@ export async function recordAuditEvent(params: {
     });
   } catch {
     // Best-effort — a missed audit row must never block login/logout.
+  }
+}
+
+/**
+ * Audit entry for work with no user behind it — currently the cron-driven automated backup
+ * (app/api/backup/run), which has no session and therefore no bearer token. Uses the service role,
+ * which needs an explicit `grant insert on public.audit_log` (see the backup_recovery migration);
+ * `user_id` is left null, which the audit_log FK allows.
+ */
+export async function recordSystemAuditEvent(params: {
+  module: string;
+  action: string;
+  details?: string;
+}): Promise<void> {
+  const key = authEnv.serviceRoleKey;
+  if (!key) return;
+
+  try {
+    await fetch(`${authEnv.restUrl}/audit_log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        user_id: null,
+        email: "system",
+        role: "system",
+        module: params.module,
+        action: params.action,
+        details: params.details,
+      }),
+      cache: "no-store",
+    });
+  } catch {
+    // Best-effort — a missed audit row must never fail the backup itself.
   }
 }
 

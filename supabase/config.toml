@@ -10,7 +10,10 @@ enabled = true
 port = 54321
 # Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
 # endpoints. `public` and `graphql_public` schemas are included by default.
-schemas = ["public", "graphql_public"]
+# `raao_ops` holds the Backup & Recovery bookkeeping tables. They are deliberately outside
+# `public` so that a pg_restore of the public/auth/storage schemas cannot erase the backup history
+# — see supabase/migrations/20260810120000_backup_recovery.sql.
+schemas = ["public", "graphql_public", "raao_ops"]
 # Extra schemas to add to the search_path of every request.
 extra_search_path = ["public", "extensions"]
 # The maximum number of rows returns from a view, table, or stored procedure. Limits payload size
