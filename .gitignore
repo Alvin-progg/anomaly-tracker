@@ -21,6 +21,9 @@ front-end-ref
 # production
 /build
 
+# database dumps written by the Backup & Recovery module
+/backups
+
 # misc
 .DS_Store
 *.pem

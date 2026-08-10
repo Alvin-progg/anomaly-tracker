@@ -14,12 +14,22 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    # Dump files must outlive the container — the whole point of the Backup & Recovery module.
+    volumes:
+      - ./backups:/app/backups
     environment:
       - HOST=0.0.0.0
       - PORT=3000
       - SUPABASE_URL=http://host.docker.internal:54321
       - SUPABASE_ANON_KEY=
+      - SUPABASE_SERVICE_ROLE_KEY=
       - JWT_SECRET=
       - COOKIE_SECURE=false
       - SESSION_IDLE_TIMEOUT_MINUTES=15
+      # Backup & Recovery. DATABASE_URL points at the Supabase-CLI-managed Postgres, same
+      # host.docker.internal caveat as SUPABASE_URL above. The role must be `supabase_admin`,
+      # not `postgres` — see the note in .env.example and app/lib/backup/pg.ts.
+      - DATABASE_URL=postgresql://supabase_admin:postgres@host.docker.internal:54322/postgres
+      - BACKUP_DIR=/app/backups
+      - BACKUP_CRON_SECRET=
     restart: unless-stopped

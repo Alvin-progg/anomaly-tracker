@@ -29,6 +29,39 @@ claim in it is trusted, since it reaches the app as a cookie (client-controlled 
 column list against a different GoTrue version. `enable_signup` is `false` in
 `supabase/config.toml`: accounts are admin-created only, no public signup.
 
+**Backup & Recovery** (`app/admin/backup/`, `app/lib/backup/`) is the one module that does not go
+through PostgREST for its real work: `app/lib/backup/pg.ts` spawns `pg_dump -Fc` / `pg_restore`
+against `DATABASE_URL` so a dump covers the `auth` schema (GoTrue accounts and password hashes)
+and `storage`, neither of which the Data API can reach. **The PostgreSQL client tools must be on
+the server's PATH, at a major version >= the server's** (`pg_dump` refuses to dump a newer server;
+a newer client is fine). The Dockerfile installs `postgresql17-client` to match
+`supabase/config.toml`'s `major_version = 17` exactly. For local `npm run dev` install them
+yourself — on Ubuntu 26.04 the archive only carries 18, which works against the 17.6 server:
+
+```bash
+sudo apt install postgresql-client-18
+```
+
+Without them the module still loads and records a `failed` row naming the missing binary. One
+caveat if you ever mix versions: a custom-format archive written by pg_dump 18 cannot be read by
+pg_restore 17, so a dump taken locally is not restorable inside the 17-client app container. The
+version guard in `restoreBackup()` compares *server* versions and will not catch that.
+
+**`DATABASE_URL` must connect as `supabase_admin`, not `postgres`.** A Supabase dump carries
+`ALTER ... OWNER TO supabase_auth_admin` / `supabase_storage_admin` and
+`ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin`. `postgres` is not a member of those roles, so
+restoring as it fails 73 statements ("must be able to SET ROLE", "permission denied to change
+default privileges") — table data still lands, which makes the half-restore easy to miss. As
+`supabase_admin` (a superuser) `pg_restore` exits 0 with no errors.
+
+Its two bookkeeping tables live in a **`raao_ops` schema, not `public`** — `pg_dump` emits a
+literal `DROP SCHEMA IF EXISTS public` for an explicitly selected schema, so a restore would
+otherwise erase the backup history along with everything else. `raao_ops` is listed in `schemas`
+under `[api]` in `supabase/config.toml`, and because more than one schema is exposed, PostgREST
+needs an `Accept-Profile` (read) / `Content-Profile` (write) header to route there — see
+`app/lib/backup/backups.ts`. Automated backups come from `POST /api/backup/run`, guarded by
+`BACKUP_CRON_SECRET` and driven by the host's crontab; Next.js has no scheduler of its own.
+
 ## Commands
 
 ```bash

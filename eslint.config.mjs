@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Not part of the Next.js app: `front-end-ref` is the gitignored Figma/Vite reference
+    // scaffold and `supabase/.temp` is CLI scratch output. Linting them buried real findings
+    // under ~190 pre-existing problems.
+    "front-end-ref/**",
+    "supabase/.temp/**",
   ]),
 ]);
 

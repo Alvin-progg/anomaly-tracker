@@ -20,7 +20,8 @@ export type IconName =
   | "activity"
   | "search"
   | "plus"
-  | "edit";
+  | "edit"
+  | "download";
 
 const paths: Record<IconName, React.ReactNode> = {
   dashboard: (
@@ -65,6 +66,13 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <polyline points="1 4 1 10 7 10" />
       <path d="M3.51 15a9 9 0 1 0 .49-4.65" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
     </>
   ),
   file: (

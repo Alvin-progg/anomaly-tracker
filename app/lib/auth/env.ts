@@ -23,4 +23,11 @@ export const authEnv = {
   serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   cookieSecure: process.env.COOKIE_SECURE === "true",
   idleTimeoutMinutes: Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES ?? "15"),
+  // Direct Postgres connection used only by app/lib/backup/pg.ts (pg_dump/pg_restore). Optional
+  // at module load, same reasoning as serviceRoleKey above: a missing value should break the
+  // Backup & Recovery module alone, not every route in the app.
+  databaseUrl: process.env.DATABASE_URL,
+  backupDir: process.env.BACKUP_DIR ?? "backups",
+  // Unset disables app/api/backup/run — automated backups are opt-in.
+  backupCronSecret: process.env.BACKUP_CRON_SECRET,
 };
