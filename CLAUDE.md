@@ -10,6 +10,29 @@ Next.js 16 (App Router) + React 19 + Tailwind CSS 4. Phase 1 (Authentication & L
 the RAAO Budget Monitoring System is implemented — see `app/lib/auth/`, `app/login/`,
 `app/admin/`, `app/personnel/`, and `proxy.ts`.
 
+`front-end-ref/` is a **read-only Figma-exported Vite mock** of the whole system, not a build
+target. Treat it as the visual spec (`src/components/PersonnelPortal.tsx` etc.) and port from it;
+its numbers are illustrative and frequently do not add up, so re-derive figures rather than
+copying them.
+
+**The Budget Personnel dashboard** (`app/personnel/dashboard-content.tsx`) is the first module
+reading the RAAO ledger: `public.departments` / `appropriations` / `allotments` / `obligations` /
+`liquidations` / `anomaly_alerts`, added in
+`supabase/migrations/20260812140000_raao_records.sql`. Its four KPI figures and both charts come
+from three `security_invoker` **views** (`budget_summary`, `budget_by_department`,
+`budget_by_fund`) scoped to the fiscal year marked `active` — PostgREST cannot `GROUP BY`, and a
+view without `security_invoker` would run as its owner and bypass RLS. Read helpers live in
+`app/lib/budget/dashboard.ts`, peso formatting in `app/lib/budget/format.ts`.
+`20260812150000_raao_sample_data.sql` is demo data in its own migration so production can drop
+that one file; unlike the mock it reconciles (per-department and per-fund breakdowns both total
+the ₱22.45M headline, and no department is obligated past its release).
+
+Charts are **recharts** in client components under `app/components/charts/`. Colours come from
+`app/components/charts/palette.ts`, not the UI navy — the interface palette's three blues are
+indistinguishable to a colour-blind reader, which is fine for chrome and wrong for encoding
+identity. Those slots are validated (all-pairs CVD ΔE 9.2, normal-vision 24.0); if you add a
+series, take the next slot in order rather than inventing a hue, and re-run the validator.
+
 **Single backend stack: the Supabase CLI**, used for both local dev and production —
 `supabase start` locally, the CLI's own Docker-based deployment on the municipal server.
 `supabase/config.toml` (`project_id = "raao"`) is the one source of truth for the data/auth
