@@ -18,9 +18,12 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 export function BackupStatusCard({
   settings,
   lastSuccessful,
+  encryptionLabel,
 }: {
   settings: BackupSettings;
   lastSuccessful: BackupRecord | null;
+  /** What the *next* dump will be written with — see the Encryption Standard setting. */
+  encryptionLabel: string;
 }) {
   const [error, setError] = useState<string | undefined>();
   const [pending, startTransition] = useTransition();
@@ -60,6 +63,7 @@ export function BackupStatusCard({
         <Row label="Schedule" value={settings.scheduleLabel} />
         <Row label="Retention Period" value={`${settings.retentionDays} days`} />
         <Row label="Storage Location" value={settings.storagePath} mono />
+        <Row label="Encryption" value={encryptionLabel} />
       </div>
 
       {error && (

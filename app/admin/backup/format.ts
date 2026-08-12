@@ -1,3 +1,5 @@
+import type { BackupCipher } from "@/app/lib/backup/crypto";
+
 /**
  * Display helpers shared by the three Backup & Recovery components. Kept local to the route the
  * same way app/admin/audit/audit-log-table.tsx keeps its own formatTimestamp.
@@ -35,4 +37,11 @@ export function formatTimestamp(iso: string): string {
 
 export function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** How a stored dump's cipher reads in the UI — matches the labels on the Security Policies page. */
+export function formatEncryption(cipher: BackupCipher): string {
+  if (cipher === "aes-256-gcm") return "AES-256";
+  if (cipher === "aes-128-gcm") return "AES-128";
+  return "None";
 }

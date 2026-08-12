@@ -3,10 +3,10 @@ import { SectionCard, SectionTitle } from "@/app/components/ui/section-card";
 import { TableContainer } from "@/app/components/ui/table-container";
 import { Badge } from "@/app/components/ui/badge";
 import { Btn } from "@/app/components/ui/btn";
-import { formatBytes, formatTimestamp, titleCase } from "./format";
+import { formatBytes, formatEncryption, formatTimestamp, titleCase } from "./format";
 import type { BackupRecord } from "@/app/lib/backup/backups";
 
-const COLUMNS = ["Backup ID", "Date & Time", "Size", "Type", "Status", "Action"];
+const COLUMNS = ["Backup ID", "Date & Time", "Size", "Type", "Encryption", "Status", "Action"];
 
 function typeVariant(type: BackupRecord["type"]) {
   if (type === "manual") return "blue" as const;
@@ -55,6 +55,12 @@ export function BackupHistoryTable({ backups }: { backups: BackupRecord[] }) {
                   </td>
                   <td className="px-3.5 py-2.5">
                     <Badge label={titleCase(b.type)} variant={typeVariant(b.type)} />
+                  </td>
+                  <td className="px-3.5 py-2.5">
+                    <Badge
+                      label={formatEncryption(b.encryption)}
+                      variant={b.encryption === "none" ? "gray" : "green"}
+                    />
                   </td>
                   <td className="px-3.5 py-2.5">
                     <Badge label={titleCase(b.status)} variant={statusVariant(b.status)} />

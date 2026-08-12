@@ -13,6 +13,12 @@ export interface RaaoJwtPayload {
   exp: number;
   /** Fixed Postgres/PostgREST role ("authenticated") — NOT the app's admin/personnel role. */
   role?: string;
+  /**
+   * Authenticator Assurance Level. "aal1" = password only, "aal2" = a TOTP factor was verified
+   * for this session. Set by GoTrue and preserved across refreshes; checked in dal.ts when the
+   * Two-Factor Authentication setting is on.
+   */
+  aal?: string;
   app_metadata?: { role?: string };
 }
 

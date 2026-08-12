@@ -28,6 +28,13 @@ export const authEnv = {
   // Backup & Recovery module alone, not every route in the app.
   databaseUrl: process.env.DATABASE_URL,
   backupDir: process.env.BACKUP_DIR ?? "backups",
+  // Passphrase for encrypting dump files at rest (app/lib/backup/crypto.ts), which is what the
+  // Encryption Standard setting in /admin/security selects the cipher for. Optional, same
+  // reasoning as the two above: unset means dumps stay in plaintext and the Security Policies
+  // page says so, rather than the Backup module refusing to run. Rotating it makes existing
+  // encrypted dumps unreadable — each backup row records the cipher it was written with, but
+  // there is only ever one key.
+  backupEncryptionKey: process.env.BACKUP_ENCRYPTION_KEY,
   // Unset disables app/api/backup/run — automated backups are opt-in.
   backupCronSecret: process.env.BACKUP_CRON_SECRET,
 };

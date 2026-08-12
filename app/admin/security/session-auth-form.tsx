@@ -14,7 +14,14 @@ const encryptionOptions = [
   { value: "aes128", label: "AES-128" },
 ];
 
-export function SessionAuthForm({ settings }: { settings: SecuritySettings }) {
+export function SessionAuthForm({
+  settings,
+  backupEncryptionKeySet,
+}: {
+  settings: SecuritySettings;
+  /** Whether BACKUP_ENCRYPTION_KEY exists on the server — never the key itself. */
+  backupEncryptionKeySet: boolean;
+}) {
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(settings.twoFactorEnabled);
   const [error, setError] = useState<string | undefined>();
   const [pending, startTransition] = useTransition();
@@ -56,18 +63,33 @@ export function SessionAuthForm({ settings }: { settings: SecuritySettings }) {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-[13px] text-[#1A2033]">Two-Factor Authentication (2FA)</div>
-            <div className="text-[11px] text-[#6B7A99]">Require OTP for all logins</div>
+            <div className="text-[11px] text-[#6B7A99]">
+              Require a one-time code from an authenticator app on every login. Users without a
+              registered device set one up at their next sign-in.
+            </div>
           </div>
           <Toggle checked={twoFactorEnabled} onChange={() => setTwoFactorEnabled((prev) => !prev)} />
         </div>
 
-        <Select
-          label="Encryption Standard"
-          name="encryptionStandard"
-          defaultValue={settings.encryptionStandard}
-          options={encryptionOptions}
-          required
-        />
+        <div className="flex flex-col gap-1">
+          <Select
+            label="Encryption Standard"
+            name="encryptionStandard"
+            defaultValue={settings.encryptionStandard}
+            options={encryptionOptions}
+            required
+          />
+          <div className="text-[11px] text-[#6B7A99]">
+            Cipher used to encrypt database backup files at rest. Applies to new backups only —
+            existing archives keep the standard they were written with.
+          </div>
+          {!backupEncryptionKeySet && (
+            <div className="px-3 py-2 mt-1 bg-amber-50 rounded-md text-[11px] text-amber-800 border border-amber-200">
+              Backups are being written unencrypted: BACKUP_ENCRYPTION_KEY is not set on the server.
+              Until it is, this setting has no effect.
+            </div>
+          )}
+        </div>
 
         <Input
           label="Max Failed Login Attempts"

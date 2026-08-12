@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { verifySession } from "@/app/lib/auth/dal";
 import { getAccessToken } from "@/app/lib/auth/session";
 import { usernameToEmail } from "@/app/lib/auth/username";
-import { createUser, setUserBanned, updateUser } from "@/app/lib/auth/admin";
+import { createUser, deleteUserFactors, setUserBanned, updateUser } from "@/app/lib/auth/admin";
+import { markPasswordChanged } from "@/app/lib/auth/password-state";
 import { recordAuditEvent } from "@/app/lib/tracking/tracking";
 import { getSecuritySettings, getPasswordPolicyError } from "@/app/lib/config/security";
 import type { AppRole } from "@/app/lib/auth/gotrue";
@@ -53,6 +54,10 @@ export async function createUserAction(_prevState: UserFormState, formData: Form
     return { error: result.error };
   }
 
+  // The field is labelled "Temporary Password" in the UI, so it is treated as one: the account
+  // must set its own password at first login (app/lib/auth/password-state.ts).
+  await markPasswordChanged(result.id, { mustChange: true });
+
   await recordAuditEvent({
     accessToken: admin.accessToken,
     userId: admin.session.userId,
@@ -96,6 +101,11 @@ export async function updateUserAction(_prevState: UserFormState, formData: Form
     return { error: result.error };
   }
 
+  // An admin-set password is temporary too — same rule as createUserAction above.
+  if (password) {
+    await markPasswordChanged(result.id, { mustChange: true });
+  }
+
   await recordAuditEvent({
     accessToken: admin.accessToken,
     userId: admin.session.userId,
@@ -107,6 +117,36 @@ export async function updateUserAction(_prevState: UserFormState, formData: Form
 
   revalidatePath("/admin/users");
   return {};
+}
+
+/**
+ * Recovery for a lost authenticator. Without it, an account with an enrolled factor is locked out
+ * for good once Two-Factor Authentication is on. The user enrols a new device at next login.
+ */
+export async function reset2faAction(formData: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  if (!admin.session) return;
+
+  const id = String(formData.get("id") ?? "");
+  const email = String(formData.get("email") ?? "");
+  if (!id) return;
+
+  const result = await deleteUserFactors(id);
+  if ("error" in result) {
+    console.error("reset2faAction failed:", result.error);
+    return;
+  }
+
+  await recordAuditEvent({
+    accessToken: admin.accessToken,
+    userId: admin.session.userId,
+    email: admin.session.email,
+    role: admin.session.role,
+    action: "Reset 2FA device",
+    details: email,
+  });
+
+  revalidatePath("/admin/users");
 }
 
 export async function toggleUserStatusAction(formData: FormData): Promise<void> {

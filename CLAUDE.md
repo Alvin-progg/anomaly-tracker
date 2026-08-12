@@ -29,6 +29,30 @@ claim in it is trusted, since it reaches the app as a cookie (client-controlled 
 column list against a different GoTrue version. `enable_signup` is `false` in
 `supabase/config.toml`: accounts are admin-created only, no public signup.
 
+**Every setting on `/admin/security` is enforced, not just stored.** The header comment in
+`supabase/migrations/20260806130000_security_settings.sql` claiming 2FA and the encryption
+standard "have no real backend today" is out of date — it is left alone only because editing an
+applied migration invites checksum drift. Where each one bites:
+
+- *Two-Factor Authentication* — GoTrue's own TOTP factors (`app/lib/auth/mfa.ts`), so the secret
+  lives in `auth.mfa_factors` and rides along in a dump. Needs `enroll_enabled`/`verify_enabled`
+  under `[auth.mfa.totp]` in `supabase/config.toml`, which only takes effect after
+  `supabase stop && supabase start`. `loginAction` parks the password step's **aal1** token in
+  short-lived `raao_pending_*` cookies and only `verifyOtpAction` turns it into a session;
+  `verifySession()` (`app/lib/auth/dal.ts`) rejects an aal1 token whenever the setting is on, so
+  moving the pending cookie into `raao_at` gets nobody anywhere. Users self-enrol at
+  `/login/verify`; an admin clears a lost device from `/admin/users`.
+- *Password Expiry* — `public.user_password_state` (service-role only, `login_attempts` shape)
+  records when each password was last set; `markPasswordChanged` is called from every place a
+  password is written. `verifySession()` sends an expired or admin-issued password to
+  `/change-password`, which is why that page and its action use `verifyIdentity()` instead — the
+  full gate would bounce the user off the one screen that clears it.
+- *Encryption Standard* — picks the AES-GCM cipher `app/lib/backup/crypto.ts` seals dump files
+  with; see the Backup & Recovery notes below.
+
+`getSecuritySettings()` is wrapped in React `cache()` because those gates read it on every
+request alongside the layouts — it is a per-request memo, the fetch itself stays `no-store`.
+
 **Backup & Recovery** (`app/admin/backup/`, `app/lib/backup/`) is the one module that does not go
 through PostgREST for its real work: `app/lib/backup/pg.ts` spawns `pg_dump -Fc` / `pg_restore`
 against `DATABASE_URL` so a dump covers the `auth` schema (GoTrue accounts and password hashes)
@@ -61,6 +85,16 @@ under `[api]` in `supabase/config.toml`, and because more than one schema is exp
 needs an `Accept-Profile` (read) / `Content-Profile` (write) header to route there — see
 `app/lib/backup/backups.ts`. Automated backups come from `POST /api/backup/run`, guarded by
 `BACKUP_CRON_SECRET` and driven by the host's crontab; Next.js has no scheduler of its own.
+
+**Dumps are encrypted at rest when `BACKUP_ENCRYPTION_KEY` is set** — `app/lib/backup/crypto.ts`
+streams the `pg_dump` output through AES-256-GCM or AES-128-GCM, whichever the Encryption Standard
+setting names, into a file headed by the magic `RAAOBK1`. `pg_dump` cannot encrypt, so an
+encrypted backup is dumped to a `.tmp` first and sealed on the way to its final name; restore and
+download decrypt to a scratch file that is always removed. `raao_ops.backups.encryption` records
+what each file actually is, so dumps taken before this existed (`none`) and dumps taken under the
+other cipher both stay restorable. There is only one key and it is stored nowhere: rotating
+`BACKUP_ENCRYPTION_KEY` makes every existing encrypted dump unrestorable. Unset it and backups
+are plaintext, which `/admin/security` says out loud.
 
 ## Commands
 
