@@ -20,6 +20,7 @@ import {
   type RecordStatus,
 } from "@/app/lib/raao/records";
 import { obligationAttachmentPath, uploadObligationAttachment } from "@/app/lib/raao/attachments";
+import { detectExpenditureSpike } from "@/app/lib/alerts/alerts";
 
 export interface RaaoFormState {
   error?: string;
@@ -193,8 +194,18 @@ export async function createObligationAction(_prevState: RaaoFormState, formData
     }
   }
 
+  // Best-effort — a detection failure must never block the obligation that was already created.
+  let spikeWarning: string | undefined;
+  try {
+    const spike = await detectExpenditureSpike(auth.accessToken, obligationId);
+    if (spike) spikeWarning = `Flagged as a potential expenditure spike (${spike.alertRef}) for review.`;
+  } catch {
+    // ignore — detection is not part of the obligation's own success/failure path
+  }
+
   revalidatePath(REVALIDATE_PATH);
-  return warning ? { warning } : {};
+  const combinedWarning = warning ?? spikeWarning;
+  return combinedWarning ? { warning: combinedWarning } : {};
 }
 
 export async function createLiquidationAction(_prevState: RaaoFormState, formData: FormData): Promise<RaaoFormState> {
