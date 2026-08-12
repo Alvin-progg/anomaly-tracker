@@ -83,11 +83,25 @@ Edit `.env.local`:
 ```
 SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_ANON_KEY=<Publishable key from `supabase status`>
+SUPABASE_SERVICE_ROLE_KEY=<service_role key from `supabase status`>
 ```
 
 Leave `COOKIE_SECURE=false` for local HTTP testing, and `SESSION_IDLE_TIMEOUT_MINUTES` at its
 default unless you're specifically testing idle-timeout behavior. No JWT secret is needed — the
 app verifies session tokens against GoTrue's JWKS endpoint, not a shared secret.
+
+`SUPABASE_SERVICE_ROLE_KEY` is optional for most manual testing, but required for: User Account
+Management (`/admin/users`), Backup & Recovery, and the automated Delayed Liquidation scan (see
+[Testing AI Anomaly Alerts](#testing-ai-anomaly-alerts) below). Without it those features degrade
+gracefully (a clear error/disabled state) rather than crashing the app.
+
+Everything else in `.env.example` is optional and feature-specific — each var has its own comment
+explaining what it unlocks and what happens if it's left unset. Two worth knowing about for QA:
+
+- `GROQ_API_KEY` — enables the "Get AI Explanation" button on `/personnel/alerts`. Get a free key
+  at [console.groq.com/keys](https://console.groq.com/keys). Unset = the button shows a friendly
+  "not configured" message instead of erroring.
+- `ALERTS_SCAN_SECRET` — required to test the Delayed Liquidation detection rule; see below.
 
 ## 4. Start the app
 
@@ -108,6 +122,38 @@ with the **username** (not the full email) on the login form:
 | `personnel`  | `ChangeMe123!` | personnel  | `/personnel` |
 
 Public signup is disabled — these are the only accounts available in a fresh environment.
+
+## Testing AI Anomaly Alerts
+
+`/personnel/alerts` reviews anomalies flagged against RAAO obligations. Five of the six detection
+rules run automatically the moment an obligation is created (`/personnel/raao` → Obligations →
+New Entry) — no setup needed to see them fire:
+
+| Rule | Fires when |
+|---|---|
+| Expenditure Spike | Amount ≥150% above the department's 30-day average obligation amount |
+| Duplicate Entry Detected | Same department, payee, amount, and description as another obligation within 7 days |
+| Structuring | 3+ obligations for the same department within 30 days, each sitting at 90–99.99% of the ₱500,000 approval threshold |
+| Missing Supporting Document | No file attached to the obligation |
+| Obligation Exceeds Allotment | Only fires once an obligation is linked to an allotment — the current New Obligation form doesn't expose an allotment picker, so this one can't be triggered through the UI yet |
+
+If any rule fires, the obligation form shows a banner naming the alert ref(s) (e.g. "Flagged 2
+potential anomaly alerts for review: AID-2026-0012, AID-2026-0013").
+
+**Delayed Liquidation** is different — it depends on time passing (an obligation outstanding
+>30 days with no liquidation recorded), so it can't fire at creation time. It runs on a schedule
+instead, triggered by `POST /api/alerts/scan-delayed-liquidations`. To test it manually:
+
+1. Set `ALERTS_SCAN_SECRET` in `.env.local` to any value and restart `npm run dev`.
+2. Create an obligation dated more than 30 days ago with no liquidation against it (or just use
+   the seed data — several sample obligations already qualify).
+3. Trigger the scan:
+   ```bash
+   curl -X POST -H "x-alerts-scan-secret: <your value>" \
+     http://localhost:3000/api/alerts/scan-delayed-liquidations
+   ```
+   Response is `{"created": N}`. Re-running it should return `{"created": 0}` — the scan skips
+   obligations it's already flagged.
 
 ## Useful local URLs
 
