@@ -1606,6 +1606,158 @@
       ],
       "security_labels": []
     },
+    "procedure:public.detect_delayed_liquidations()": {
+      "schema": "public",
+      "name": "detect_delayed_liquidations",
+      "kind": "f",
+      "return_type": "public.anomaly_alerts",
+      "return_type_schema": "public",
+      "language": "plpgsql",
+      "security_definer": false,
+      "volatility": "v",
+      "parallel_safety": "u",
+      "execution_cost": 100,
+      "result_rows": 1000,
+      "is_strict": false,
+      "leakproof": false,
+      "returns_set": true,
+      "argument_count": 0,
+      "argument_default_count": 0,
+      "argument_names": null,
+      "argument_types": [],
+      "all_argument_types": [],
+      "argument_modes": null,
+      "argument_defaults": null,
+      "source_code": "\ndeclare\n  v_threshold_days int;\n  v_row record;\n  v_days_outstanding int;\n  v_confidence smallint;\n  v_severity text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select value::int into v_threshold_days from public.financial_thresholds\n    where module = 'liquidations' and threshold_type = 'days' and name = 'Delayed Liquidation' limit 1;\n  if v_threshold_days is null then return; end if;\n\n  for v_row in\n    select o.id, o.ref, o.department_id, o.amount, o.record_date,\n      coalesce((select sum(l.amount) from public.liquidations l\n                where l.obligation_id = o.id and l.status <> 'draft'), 0) as liquidated\n    from public.obligations o\n    where o.status <> 'draft'\n      and current_date - o.record_date > v_threshold_days\n      and not exists (\n        select 1 from public.anomaly_alerts a\n        where a.record_ref = o.ref and a.alert_type = 'Delayed Liquidation'\n      )\n  loop\n    continue when v_row.liquidated >= v_row.amount; -- fully liquidated, nothing to flag\n\n    v_days_outstanding := current_date - v_row.record_date;\n    v_confidence := least(99, greatest(70, 70 + (v_days_outstanding - v_threshold_days)));\n    v_severity := case when v_days_outstanding > v_threshold_days * 1.5 then 'High' else 'Medium' end;\n\n    select 'AID-' || to_char(current_date, 'YYYY') || '-' ||\n      lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n      into v_alert_ref from public.anomaly_alerts\n      where alert_ref like 'AID-' || to_char(current_date, 'YYYY') || '-%';\n\n    insert into public.anomaly_alerts\n      (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n    values (v_alert_ref, 'Delayed Liquidation', v_row.ref, v_row.department_id,\n      format('Obligated %s days ago with no liquidation recorded. Threshold is %s days.', v_days_outstanding, v_threshold_days),\n      v_confidence, v_severity, 'Pending', current_date)\n    returning * into v_new_row;\n    return next v_new_row;\n  end loop;\n  return;\nend;\n",
+      "binary_path": null,
+      "sql_body": null,
+      "definition": "CREATE OR REPLACE FUNCTION public.detect_delayed_liquidations()\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_threshold_days int;\n  v_row record;\n  v_days_outstanding int;\n  v_confidence smallint;\n  v_severity text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select value::int into v_threshold_days from public.financial_thresholds\n    where module = 'liquidations' and threshold_type = 'days' and name = 'Delayed Liquidation' limit 1;\n  if v_threshold_days is null then return; end if;\n\n  for v_row in\n    select o.id, o.ref, o.department_id, o.amount, o.record_date,\n      coalesce((select sum(l.amount) from public.liquidations l\n                where l.obligation_id = o.id and l.status <> 'draft'), 0) as liquidated\n    from public.obligations o\n    where o.status <> 'draft'\n      and current_date - o.record_date > v_threshold_days\n      and not exists (\n        select 1 from public.anomaly_alerts a\n        where a.record_ref = o.ref and a.alert_type = 'Delayed Liquidation'\n      )\n  loop\n    continue when v_row.liquidated >= v_row.amount; -- fully liquidated, nothing to flag\n\n    v_days_outstanding := current_date - v_row.record_date;\n    v_confidence := least(99, greatest(70, 70 + (v_days_outstanding - v_threshold_days)));\n    v_severity := case when v_days_outstanding > v_threshold_days * 1.5 then 'High' else 'Medium' end;\n\n    select 'AID-' || to_char(current_date, 'YYYY') || '-' ||\n      lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n      into v_alert_ref from public.anomaly_alerts\n      where alert_ref like 'AID-' || to_char(current_date, 'YYYY') || '-%';\n\n    insert into public.anomaly_alerts\n      (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n    values (v_alert_ref, 'Delayed Liquidation', v_row.ref, v_row.department_id,\n      format('Obligated %s days ago with no liquidation recorded. Threshold is %s days.', v_days_outstanding, v_threshold_days),\n      v_confidence, v_severity, 'Pending', current_date)\n    returning * into v_new_row;\n    return next v_new_row;\n  end loop;\n  return;\nend;\n$function$\n",
+      "config": null,
+      "owner": "postgres",
+      "comment": null,
+      "privileges": [
+        {
+          "grantee": "PUBLIC",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "postgres",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "service_role",
+          "privilege": "EXECUTE",
+          "grantable": false
+        }
+      ],
+      "security_labels": []
+    },
+    "procedure:public.detect_duplicate_obligation(uuid)": {
+      "schema": "public",
+      "name": "detect_duplicate_obligation",
+      "kind": "f",
+      "return_type": "public.anomaly_alerts",
+      "return_type_schema": "public",
+      "language": "plpgsql",
+      "security_definer": false,
+      "volatility": "v",
+      "parallel_safety": "u",
+      "execution_cost": 100,
+      "result_rows": 1000,
+      "is_strict": false,
+      "leakproof": false,
+      "returns_set": true,
+      "argument_count": 1,
+      "argument_default_count": 0,
+      "argument_names": [
+        "p_obligation_id"
+      ],
+      "argument_types": [
+        "uuid"
+      ],
+      "all_argument_types": [],
+      "argument_modes": null,
+      "argument_defaults": null,
+      "source_code": "\ndeclare\n  v_obligation record;\n  v_flag text;\n  v_duplicate_ref text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.amount, o.payee, o.description, o.record_date\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found then return; end if;\n\n  select value into v_flag from public.financial_thresholds\n    where module = 'all_modules' and threshold_type = 'flag' and name = 'Duplicate Entry Detection' limit 1;\n  if v_flag is distinct from 'Enabled' then return; end if;\n\n  select o.ref into v_duplicate_ref from public.obligations o\n    where o.id <> v_obligation.id and o.status <> 'draft'\n      and o.department_id = v_obligation.department_id\n      and o.amount = v_obligation.amount\n      and lower(o.payee) = lower(v_obligation.payee)\n      and lower(o.description) = lower(v_obligation.description)\n      and o.record_date between v_obligation.record_date - interval '7 days' and v_obligation.record_date + interval '7 days'\n    order by o.record_date desc limit 1;\n  if v_duplicate_ref is null then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Duplicate Entry Detected', v_obligation.ref, v_obligation.department_id,\n    format('Possible duplicate of %s. Same payee, amount and description within 7 days.', v_duplicate_ref),\n    90, 'High', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n",
+      "binary_path": null,
+      "sql_body": null,
+      "definition": "CREATE OR REPLACE FUNCTION public.detect_duplicate_obligation(p_obligation_id uuid)\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_obligation record;\n  v_flag text;\n  v_duplicate_ref text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.amount, o.payee, o.description, o.record_date\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found then return; end if;\n\n  select value into v_flag from public.financial_thresholds\n    where module = 'all_modules' and threshold_type = 'flag' and name = 'Duplicate Entry Detection' limit 1;\n  if v_flag is distinct from 'Enabled' then return; end if;\n\n  select o.ref into v_duplicate_ref from public.obligations o\n    where o.id <> v_obligation.id and o.status <> 'draft'\n      and o.department_id = v_obligation.department_id\n      and o.amount = v_obligation.amount\n      and lower(o.payee) = lower(v_obligation.payee)\n      and lower(o.description) = lower(v_obligation.description)\n      and o.record_date between v_obligation.record_date - interval '7 days' and v_obligation.record_date + interval '7 days'\n    order by o.record_date desc limit 1;\n  if v_duplicate_ref is null then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Duplicate Entry Detected', v_obligation.ref, v_obligation.department_id,\n    format('Possible duplicate of %s. Same payee, amount and description within 7 days.', v_duplicate_ref),\n    90, 'High', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n$function$\n",
+      "config": null,
+      "owner": "postgres",
+      "comment": null,
+      "privileges": [
+        {
+          "grantee": "PUBLIC",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "postgres",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "authenticated",
+          "privilege": "EXECUTE",
+          "grantable": false
+        }
+      ],
+      "security_labels": []
+    },
+    "procedure:public.detect_exceeds_allotment(uuid)": {
+      "schema": "public",
+      "name": "detect_exceeds_allotment",
+      "kind": "f",
+      "return_type": "public.anomaly_alerts",
+      "return_type_schema": "public",
+      "language": "plpgsql",
+      "security_definer": false,
+      "volatility": "v",
+      "parallel_safety": "u",
+      "execution_cost": 100,
+      "result_rows": 1000,
+      "is_strict": false,
+      "leakproof": false,
+      "returns_set": true,
+      "argument_count": 1,
+      "argument_default_count": 0,
+      "argument_names": [
+        "p_obligation_id"
+      ],
+      "argument_types": [
+        "uuid"
+      ],
+      "all_argument_types": [],
+      "argument_modes": null,
+      "argument_defaults": null,
+      "source_code": "\ndeclare\n  v_obligation record;\n  v_allotment_amount numeric;\n  v_obligated_total numeric;\n  v_threshold_pct numeric;\n  v_pct numeric;\n  v_confidence smallint;\n  v_severity text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.record_date, o.allotment_id\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found or v_obligation.allotment_id is null then return; end if;\n\n  select amount into v_allotment_amount from public.allotments where id = v_obligation.allotment_id;\n  if v_allotment_amount is null or v_allotment_amount = 0 then return; end if;\n\n  select coalesce(sum(amount), 0) into v_obligated_total\n    from public.obligations where allotment_id = v_obligation.allotment_id and status <> 'draft';\n\n  select value::numeric into v_threshold_pct from public.financial_thresholds\n    where module = 'obligations' and threshold_type = 'percentage' and name = 'Obligation-Allotment Ceiling' limit 1;\n  if v_threshold_pct is null then return; end if;\n\n  v_pct := (v_obligated_total / v_allotment_amount) * 100;\n  if v_pct < v_threshold_pct then return; end if;\n\n  v_confidence := least(99, greatest(60, round(v_pct)));\n  v_severity := case when v_pct >= 100 then 'High' else 'Medium' end;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Obligation Exceeds Allotment', v_obligation.ref, v_obligation.department_id,\n    format('Obligation would bring total obligations to %s%% of the released allotment.', round(v_pct, 1)),\n    v_confidence, v_severity, 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n",
+      "binary_path": null,
+      "sql_body": null,
+      "definition": "CREATE OR REPLACE FUNCTION public.detect_exceeds_allotment(p_obligation_id uuid)\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_obligation record;\n  v_allotment_amount numeric;\n  v_obligated_total numeric;\n  v_threshold_pct numeric;\n  v_pct numeric;\n  v_confidence smallint;\n  v_severity text;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.record_date, o.allotment_id\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found or v_obligation.allotment_id is null then return; end if;\n\n  select amount into v_allotment_amount from public.allotments where id = v_obligation.allotment_id;\n  if v_allotment_amount is null or v_allotment_amount = 0 then return; end if;\n\n  select coalesce(sum(amount), 0) into v_obligated_total\n    from public.obligations where allotment_id = v_obligation.allotment_id and status <> 'draft';\n\n  select value::numeric into v_threshold_pct from public.financial_thresholds\n    where module = 'obligations' and threshold_type = 'percentage' and name = 'Obligation-Allotment Ceiling' limit 1;\n  if v_threshold_pct is null then return; end if;\n\n  v_pct := (v_obligated_total / v_allotment_amount) * 100;\n  if v_pct < v_threshold_pct then return; end if;\n\n  v_confidence := least(99, greatest(60, round(v_pct)));\n  v_severity := case when v_pct >= 100 then 'High' else 'Medium' end;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Obligation Exceeds Allotment', v_obligation.ref, v_obligation.department_id,\n    format('Obligation would bring total obligations to %s%% of the released allotment.', round(v_pct, 1)),\n    v_confidence, v_severity, 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n$function$\n",
+      "config": null,
+      "owner": "postgres",
+      "comment": null,
+      "privileges": [
+        {
+          "grantee": "PUBLIC",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "postgres",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "authenticated",
+          "privilege": "EXECUTE",
+          "grantable": false
+        }
+      ],
+      "security_labels": []
+    },
     "procedure:public.detect_expenditure_spike(uuid)": {
       "schema": "public",
       "name": "detect_expenditure_spike",
@@ -1636,6 +1788,110 @@
       "binary_path": null,
       "sql_body": null,
       "definition": "CREATE OR REPLACE FUNCTION public.detect_expenditure_spike(p_obligation_id uuid)\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_obligation record;\n  v_avg numeric;\n  v_threshold_pct numeric;\n  v_pct_above numeric;\n  v_confidence smallint;\n  v_severity text;\n  v_alert_ref text;\n  v_description text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.amount, o.record_date\n    into v_obligation\n    from public.obligations o\n    where o.id = p_obligation_id;\n  if not found then\n    return;\n  end if;\n\n  select avg(o.amount) into v_avg\n    from public.obligations o\n    where o.department_id = v_obligation.department_id\n      and o.id <> v_obligation.id\n      and o.status <> 'draft'\n      and o.record_date >= v_obligation.record_date - interval '30 days'\n      and o.record_date < v_obligation.record_date;\n  if v_avg is null or v_avg = 0 then\n    return; -- no baseline yet for this department, nothing to compare against\n  end if;\n\n  select value::numeric into v_threshold_pct\n    from public.financial_thresholds\n    where module = 'obligations' and threshold_type = 'percentage' and name = 'Expenditure Spike Alert'\n    limit 1;\n  if v_threshold_pct is null then\n    return;\n  end if;\n\n  v_pct_above := ((v_obligation.amount - v_avg) / v_avg) * 100;\n  if v_pct_above < v_threshold_pct then\n    return; -- under threshold, not a spike\n  end if;\n\n  v_confidence := least(99, greatest(50, round(50 + v_pct_above / 3)));\n  v_severity := case when v_pct_above >= v_threshold_pct * 1.5 then 'High' else 'Medium' end;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref\n    from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  v_description := format(\n    'Obligation amount ₱%s is %s%% above the 30-day average for this department.',\n    to_char(v_obligation.amount, 'FM999,999,999,999.00'), round(v_pct_above)\n  );\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values\n    (v_alert_ref, 'Expenditure Spike', v_obligation.ref, v_obligation.department_id, v_description,\n     v_confidence, v_severity, 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n\n  return next v_new_row;\nend;\n$function$\n",
+      "config": null,
+      "owner": "postgres",
+      "comment": null,
+      "privileges": [
+        {
+          "grantee": "PUBLIC",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "postgres",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "authenticated",
+          "privilege": "EXECUTE",
+          "grantable": false
+        }
+      ],
+      "security_labels": []
+    },
+    "procedure:public.detect_missing_attachment(uuid)": {
+      "schema": "public",
+      "name": "detect_missing_attachment",
+      "kind": "f",
+      "return_type": "public.anomaly_alerts",
+      "return_type_schema": "public",
+      "language": "plpgsql",
+      "security_definer": false,
+      "volatility": "v",
+      "parallel_safety": "u",
+      "execution_cost": 100,
+      "result_rows": 1000,
+      "is_strict": false,
+      "leakproof": false,
+      "returns_set": true,
+      "argument_count": 1,
+      "argument_default_count": 0,
+      "argument_names": [
+        "p_obligation_id"
+      ],
+      "argument_types": [
+        "uuid"
+      ],
+      "all_argument_types": [],
+      "argument_modes": null,
+      "argument_defaults": null,
+      "source_code": "\ndeclare\n  v_obligation record;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.record_date, o.attachment_path\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found or v_obligation.attachment_path is not null then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Missing Supporting Document', v_obligation.ref, v_obligation.department_id,\n    'No supporting document (PO, invoice, or delivery receipt) attached to this obligation.',\n    70, 'Low', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n",
+      "binary_path": null,
+      "sql_body": null,
+      "definition": "CREATE OR REPLACE FUNCTION public.detect_missing_attachment(p_obligation_id uuid)\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_obligation record;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.record_date, o.attachment_path\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found or v_obligation.attachment_path is not null then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Missing Supporting Document', v_obligation.ref, v_obligation.department_id,\n    'No supporting document (PO, invoice, or delivery receipt) attached to this obligation.',\n    70, 'Low', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n$function$\n",
+      "config": null,
+      "owner": "postgres",
+      "comment": null,
+      "privileges": [
+        {
+          "grantee": "PUBLIC",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "postgres",
+          "privilege": "EXECUTE",
+          "grantable": false
+        },
+        {
+          "grantee": "authenticated",
+          "privilege": "EXECUTE",
+          "grantable": false
+        }
+      ],
+      "security_labels": []
+    },
+    "procedure:public.detect_structuring(uuid)": {
+      "schema": "public",
+      "name": "detect_structuring",
+      "kind": "f",
+      "return_type": "public.anomaly_alerts",
+      "return_type_schema": "public",
+      "language": "plpgsql",
+      "security_definer": false,
+      "volatility": "v",
+      "parallel_safety": "u",
+      "execution_cost": 100,
+      "result_rows": 1000,
+      "is_strict": false,
+      "leakproof": false,
+      "returns_set": true,
+      "argument_count": 1,
+      "argument_default_count": 0,
+      "argument_names": [
+        "p_obligation_id"
+      ],
+      "argument_types": [
+        "uuid"
+      ],
+      "all_argument_types": [],
+      "argument_modes": null,
+      "argument_defaults": null,
+      "source_code": "\ndeclare\n  v_obligation record;\n  v_threshold numeric;\n  v_near_count int;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.amount, o.record_date\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found then return; end if;\n\n  select value::numeric into v_threshold from public.financial_thresholds\n    where module = 'obligations' and threshold_type = 'amount' and name = 'Approval Threshold' limit 1;\n  if v_threshold is null then return; end if;\n  if v_obligation.amount < v_threshold * 0.9 or v_obligation.amount >= v_threshold then return; end if;\n\n  select count(*) into v_near_count from public.obligations\n    where department_id = v_obligation.department_id and id <> v_obligation.id and status <> 'draft'\n      and amount >= v_threshold * 0.9 and amount < v_threshold\n      and record_date between v_obligation.record_date - interval '30 days' and v_obligation.record_date;\n  if v_near_count < 2 then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Structuring', v_obligation.ref, v_obligation.department_id,\n    format('%s obligations just below the ₱%s approval threshold within 30 days for this department.',\n      v_near_count + 1, to_char(v_threshold, 'FM999,999,999,999.00')),\n    80, 'Medium', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n",
+      "binary_path": null,
+      "sql_body": null,
+      "definition": "CREATE OR REPLACE FUNCTION public.detect_structuring(p_obligation_id uuid)\n RETURNS SETOF public.anomaly_alerts\n LANGUAGE plpgsql\nAS $function$\ndeclare\n  v_obligation record;\n  v_threshold numeric;\n  v_near_count int;\n  v_alert_ref text;\n  v_new_row public.anomaly_alerts;\nbegin\n  select o.id, o.ref, o.department_id, o.amount, o.record_date\n    into v_obligation from public.obligations o where o.id = p_obligation_id;\n  if not found then return; end if;\n\n  select value::numeric into v_threshold from public.financial_thresholds\n    where module = 'obligations' and threshold_type = 'amount' and name = 'Approval Threshold' limit 1;\n  if v_threshold is null then return; end if;\n  if v_obligation.amount < v_threshold * 0.9 or v_obligation.amount >= v_threshold then return; end if;\n\n  select count(*) into v_near_count from public.obligations\n    where department_id = v_obligation.department_id and id <> v_obligation.id and status <> 'draft'\n      and amount >= v_threshold * 0.9 and amount < v_threshold\n      and record_date between v_obligation.record_date - interval '30 days' and v_obligation.record_date;\n  if v_near_count < 2 then return; end if;\n\n  select 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-' ||\n    lpad((coalesce(max(substring(alert_ref from '\\d+$')::int), 0) + 1)::text, 4, '0')\n    into v_alert_ref from public.anomaly_alerts\n    where alert_ref like 'AID-' || to_char(v_obligation.record_date, 'YYYY') || '-%';\n\n  insert into public.anomaly_alerts\n    (alert_ref, alert_type, record_ref, department_id, description, confidence, severity, status, detected_at)\n  values (v_alert_ref, 'Structuring', v_obligation.ref, v_obligation.department_id,\n    format('%s obligations just below the ₱%s approval threshold within 30 days for this department.',\n      v_near_count + 1, to_char(v_threshold, 'FM999,999,999,999.00')),\n    80, 'Medium', 'Pending', v_obligation.record_date)\n  returning * into v_new_row;\n  return next v_new_row;\nend;\n$function$\n",
       "config": null,
       "owner": "postgres",
       "comment": null,
@@ -30842,6 +31098,12 @@
         },
         {
           "grantee": "service_role",
+          "privilege": "INSERT",
+          "grantable": false,
+          "columns": null
+        },
+        {
+          "grantee": "service_role",
           "privilege": "MAINTAIN",
           "grantable": false,
           "columns": null
@@ -30849,6 +31111,12 @@
         {
           "grantee": "service_role",
           "privilege": "REFERENCES",
+          "grantable": false,
+          "columns": null
+        },
+        {
+          "grantee": "service_role",
+          "privilege": "SELECT",
           "grantable": false,
           "columns": null
         },
@@ -32537,6 +32805,12 @@
         },
         {
           "grantee": "service_role",
+          "privilege": "SELECT",
+          "grantable": false,
+          "columns": null
+        },
+        {
+          "grantee": "service_role",
           "privilege": "TRIGGER",
           "grantable": false,
           "columns": null
@@ -33743,6 +34017,12 @@
         },
         {
           "grantee": "service_role",
+          "privilege": "SELECT",
+          "grantable": false,
+          "columns": null
+        },
+        {
+          "grantee": "service_role",
           "privilege": "TRIGGER",
           "grantable": false,
           "columns": null
@@ -34930,6 +35210,12 @@
         {
           "grantee": "service_role",
           "privilege": "REFERENCES",
+          "grantable": false,
+          "columns": null
+        },
+        {
+          "grantee": "service_role",
+          "privilege": "SELECT",
           "grantable": false,
           "columns": null
         },
@@ -46909,6 +47195,96 @@
       "deptype": "n"
     },
     {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:postgres",
+      "referenced_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:postgres",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:PUBLIC",
+      "referenced_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:PUBLIC",
+      "referenced_stable_id": "role:PUBLIC",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:service_role",
+      "referenced_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_delayed_liquidations()::grantee:service_role",
+      "referenced_stable_id": "role:service_role",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:authenticated",
+      "referenced_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:authenticated",
+      "referenced_stable_id": "role:authenticated",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:postgres",
+      "referenced_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:postgres",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_duplicate_obligation(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "role:PUBLIC",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:authenticated",
+      "referenced_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:authenticated",
+      "referenced_stable_id": "role:authenticated",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:postgres",
+      "referenced_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:postgres",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_exceeds_allotment(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "role:PUBLIC",
+      "deptype": "n"
+    },
+    {
       "dependent_stable_id": "acl:procedure:public.detect_expenditure_spike(uuid)::grantee:authenticated",
       "referenced_stable_id": "procedure:public.detect_expenditure_spike(uuid)",
       "deptype": "n"
@@ -46935,6 +47311,66 @@
     },
     {
       "dependent_stable_id": "acl:procedure:public.detect_expenditure_spike(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "role:PUBLIC",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:authenticated",
+      "referenced_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:authenticated",
+      "referenced_stable_id": "role:authenticated",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:postgres",
+      "referenced_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:postgres",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_missing_attachment(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "role:PUBLIC",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:authenticated",
+      "referenced_stable_id": "procedure:public.detect_structuring(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:authenticated",
+      "referenced_stable_id": "role:authenticated",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:postgres",
+      "referenced_stable_id": "procedure:public.detect_structuring(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:postgres",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:PUBLIC",
+      "referenced_stable_id": "procedure:public.detect_structuring(uuid)",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "acl:procedure:public.detect_structuring(uuid)::grantee:PUBLIC",
       "referenced_stable_id": "role:PUBLIC",
       "deptype": "n"
     },
@@ -51266,12 +51702,12 @@
     {
       "dependent_stable_id": "constraint:_realtime.feature_flags.rollout_percentage_must_be_between_0_and_100",
       "referenced_stable_id": "column:_realtime.feature_flags.rollout_percentage",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:_realtime.feature_flags.rollout_percentage_must_be_between_0_and_100",
       "referenced_stable_id": "column:_realtime.feature_flags.rollout_percentage",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:_realtime.schema_migrations.schema_migrations_pkey",
@@ -51331,22 +51767,22 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_client_id_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.client_id",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_client_id_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.client_id",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_discovery_url_length",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.discovery_url",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_discovery_url_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.discovery_url",
       "deptype": "a"
+    },
+    {
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_discovery_url_length",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.discovery_url",
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_identifier_format",
@@ -51366,12 +51802,12 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_issuer_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.issuer",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_issuer_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.issuer",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_jwks_uri_https",
@@ -51386,22 +51822,22 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_jwks_uri_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.jwks_uri",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_jwks_uri_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.jwks_uri",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_name_length",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.name",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_name_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.name",
       "deptype": "a"
+    },
+    {
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_name_length",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.name",
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oauth2_requires_endpoints",
@@ -51436,17 +51872,12 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oauth2_requires_endpoints",
       "referenced_stable_id": "column:auth.custom_oauth_providers.userinfo_url",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oauth2_requires_endpoints",
       "referenced_stable_id": "column:auth.custom_oauth_providers.userinfo_url",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_discovery_url_https",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.discovery_url",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_discovery_url_https",
@@ -51455,6 +51886,11 @@
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_discovery_url_https",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.discovery_url",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_discovery_url_https",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
       "deptype": "n"
     },
@@ -51476,16 +51912,11 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_issuer_https",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_issuer_https",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_requires_issuer",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.issuer",
       "deptype": "a"
     },
     {
@@ -51495,13 +51926,18 @@
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_requires_issuer",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.issuer",
       "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_requires_issuer",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
       "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_oidc_requires_issuer",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_pkey",
@@ -51511,17 +51947,12 @@
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_provider_type_check",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_provider_type_check",
       "referenced_stable_id": "column:auth.custom_oauth_providers.provider_type",
-      "deptype": "a"
-    },
-    {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_https",
-      "referenced_stable_id": "column:auth.custom_oauth_providers.token_url",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_https",
@@ -51529,14 +51960,19 @@
       "deptype": "n"
     },
     {
-      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_length",
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_https",
       "referenced_stable_id": "column:auth.custom_oauth_providers.token_url",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_length",
       "referenced_stable_id": "column:auth.custom_oauth_providers.token_url",
       "deptype": "a"
+    },
+    {
+      "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_token_url_length",
+      "referenced_stable_id": "column:auth.custom_oauth_providers.token_url",
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.custom_oauth_providers.custom_oauth_providers_userinfo_url_https",
@@ -51701,12 +52137,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_authorization_code_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.authorization_code",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_authorization_code_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.authorization_code",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_authorization_id_key",
@@ -51766,12 +52202,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_nonce_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.nonce",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_nonce_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.nonce",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_pkey",
@@ -51801,12 +52237,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_scope_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.scope",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_scope_length",
       "referenced_stable_id": "column:auth.oauth_authorizations.scope",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_authorizations.oauth_authorizations_state_length",
@@ -51846,12 +52282,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_client_name_length",
       "referenced_stable_id": "column:auth.oauth_clients.client_name",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_client_name_length",
       "referenced_stable_id": "column:auth.oauth_clients.client_name",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_client_uri_length",
@@ -51866,12 +52302,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_logo_uri_length",
       "referenced_stable_id": "column:auth.oauth_clients.logo_uri",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_logo_uri_length",
       "referenced_stable_id": "column:auth.oauth_clients.logo_uri",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_clients.oauth_clients_pkey",
@@ -51936,12 +52372,12 @@
     {
       "dependent_stable_id": "constraint:auth.oauth_consents.oauth_consents_scopes_length",
       "referenced_stable_id": "column:auth.oauth_consents.scopes",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_consents.oauth_consents_scopes_length",
       "referenced_stable_id": "column:auth.oauth_consents.scopes",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.oauth_consents.oauth_consents_scopes_not_empty",
@@ -52051,12 +52487,12 @@
     {
       "dependent_stable_id": "constraint:auth.saml_providers.\"entity_id not empty\"",
       "referenced_stable_id": "column:auth.saml_providers.entity_id",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.saml_providers.\"entity_id not empty\"",
       "referenced_stable_id": "column:auth.saml_providers.entity_id",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.saml_providers.\"metadata_url not empty\"",
@@ -52071,12 +52507,12 @@
     {
       "dependent_stable_id": "constraint:auth.saml_providers.\"metadata_xml not empty\"",
       "referenced_stable_id": "column:auth.saml_providers.metadata_xml",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.saml_providers.\"metadata_xml not empty\"",
       "referenced_stable_id": "column:auth.saml_providers.metadata_xml",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.saml_providers.saml_providers_entity_id_key",
@@ -52226,12 +52662,12 @@
     {
       "dependent_stable_id": "constraint:auth.sso_domains.\"domain not empty\"",
       "referenced_stable_id": "column:auth.sso_domains.domain",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.sso_domains.\"domain not empty\"",
       "referenced_stable_id": "column:auth.sso_domains.domain",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.sso_domains.sso_domains_pkey",
@@ -52261,12 +52697,12 @@
     {
       "dependent_stable_id": "constraint:auth.sso_providers.\"resource_id not empty\"",
       "referenced_stable_id": "column:auth.sso_providers.resource_id",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:auth.sso_providers.\"resource_id not empty\"",
       "referenced_stable_id": "column:auth.sso_providers.resource_id",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:auth.sso_providers.sso_providers_pkey",
@@ -52466,12 +52902,12 @@
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_confidence_check",
       "referenced_stable_id": "column:public.anomaly_alerts.confidence",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_confidence_check",
       "referenced_stable_id": "column:public.anomaly_alerts.confidence",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_department_id_fkey",
@@ -52501,12 +52937,12 @@
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_severity_check",
       "referenced_stable_id": "column:public.anomaly_alerts.severity",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_severity_check",
       "referenced_stable_id": "column:public.anomaly_alerts.severity",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.anomaly_alerts.anomaly_alerts_status_check",
@@ -52521,12 +52957,12 @@
     {
       "dependent_stable_id": "constraint:public.appropriations.appropriations_amount_check",
       "referenced_stable_id": "column:public.appropriations.amount",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.appropriations.appropriations_amount_check",
       "referenced_stable_id": "column:public.appropriations.amount",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.appropriations.appropriations_department_id_fkey",
@@ -52656,12 +53092,12 @@
     {
       "dependent_stable_id": "constraint:public.financial_thresholds.financial_thresholds_threshold_type_check",
       "referenced_stable_id": "column:public.financial_thresholds.threshold_type",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.financial_thresholds.financial_thresholds_threshold_type_check",
       "referenced_stable_id": "column:public.financial_thresholds.threshold_type",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.fiscal_years.fiscal_years_label_key",
@@ -52676,12 +53112,12 @@
     {
       "dependent_stable_id": "constraint:public.fiscal_years.fiscal_years_status_check",
       "referenced_stable_id": "column:public.fiscal_years.status",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.fiscal_years.fiscal_years_status_check",
       "referenced_stable_id": "column:public.fiscal_years.status",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.fund_classifications.fund_classifications_name_key",
@@ -52701,12 +53137,12 @@
     {
       "dependent_stable_id": "constraint:public.liquidations.liquidations_amount_check",
       "referenced_stable_id": "column:public.liquidations.amount",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.liquidations.liquidations_amount_check",
       "referenced_stable_id": "column:public.liquidations.amount",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.liquidations.liquidations_obligation_id_fkey",
@@ -52851,22 +53287,22 @@
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_encryption_standard_check",
       "referenced_stable_id": "column:public.security_settings.encryption_standard",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_encryption_standard_check",
       "referenced_stable_id": "column:public.security_settings.encryption_standard",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:public.security_settings.security_settings_id_check",
-      "referenced_stable_id": "column:public.security_settings.id",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_id_check",
       "referenced_stable_id": "column:public.security_settings.id",
       "deptype": "a"
+    },
+    {
+      "dependent_stable_id": "constraint:public.security_settings.security_settings_id_check",
+      "referenced_stable_id": "column:public.security_settings.id",
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_password_min_length_check",
@@ -52886,17 +53322,12 @@
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_session_timeout_minutes_check",
       "referenced_stable_id": "column:public.security_settings.session_timeout_minutes",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.security_settings.security_settings_session_timeout_minutes_check",
       "referenced_stable_id": "column:public.security_settings.session_timeout_minutes",
-      "deptype": "a"
-    },
-    {
-      "dependent_stable_id": "constraint:public.system_settings.system_settings_date_format_check",
-      "referenced_stable_id": "column:public.system_settings.date_format",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.system_settings.system_settings_date_format_check",
@@ -52904,14 +53335,19 @@
       "deptype": "n"
     },
     {
-      "dependent_stable_id": "constraint:public.system_settings.system_settings_id_check",
-      "referenced_stable_id": "column:public.system_settings.id",
-      "deptype": "n"
+      "dependent_stable_id": "constraint:public.system_settings.system_settings_date_format_check",
+      "referenced_stable_id": "column:public.system_settings.date_format",
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:public.system_settings.system_settings_id_check",
       "referenced_stable_id": "column:public.system_settings.id",
       "deptype": "a"
+    },
+    {
+      "dependent_stable_id": "constraint:public.system_settings.system_settings_id_check",
+      "referenced_stable_id": "column:public.system_settings.id",
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:public.system_settings.system_settings_pkey",
@@ -52971,12 +53407,12 @@
     {
       "dependent_stable_id": "constraint:raao_ops.backup_settings.backup_settings_id_check",
       "referenced_stable_id": "column:raao_ops.backup_settings.id",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:raao_ops.backup_settings.backup_settings_id_check",
       "referenced_stable_id": "column:raao_ops.backup_settings.id",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:raao_ops.backup_settings.backup_settings_pkey",
@@ -52986,12 +53422,12 @@
     {
       "dependent_stable_id": "constraint:raao_ops.backup_settings.backup_settings_retention_days_check",
       "referenced_stable_id": "column:raao_ops.backup_settings.retention_days",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:raao_ops.backup_settings.backup_settings_retention_days_check",
       "referenced_stable_id": "column:raao_ops.backup_settings.retention_days",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:raao_ops.backups.backups_backup_ref_key",
@@ -53056,12 +53492,12 @@
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_11.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_11.payload",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_11.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_11.payload",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_12.messages_2026_08_12_pkey",
@@ -53106,22 +53542,22 @@
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_13.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_13.binary_payload",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_13.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_13.binary_payload",
-      "deptype": "n"
-    },
-    {
-      "dependent_stable_id": "constraint:realtime.messages_2026_08_13.messages_payload_exclusive",
-      "referenced_stable_id": "column:realtime.messages_2026_08_13.payload",
       "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_13.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_13.payload",
       "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "constraint:realtime.messages_2026_08_13.messages_payload_exclusive",
+      "referenced_stable_id": "column:realtime.messages_2026_08_13.payload",
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_14.messages_2026_08_14_pkey",
@@ -53136,12 +53572,12 @@
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_14.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_14.binary_payload",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_14.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_14.binary_payload",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_14.messages_payload_exclusive",
@@ -53166,12 +53602,12 @@
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_15.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_15.binary_payload",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_15.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages_2026_08_15.binary_payload",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages_2026_08_15.messages_payload_exclusive",
@@ -53196,12 +53632,12 @@
     {
       "dependent_stable_id": "constraint:realtime.messages.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages.payload",
-      "deptype": "n"
+      "deptype": "a"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages.messages_payload_exclusive",
       "referenced_stable_id": "column:realtime.messages.payload",
-      "deptype": "a"
+      "deptype": "n"
     },
     {
       "dependent_stable_id": "constraint:realtime.messages.messages_pkey",
@@ -58459,6 +58895,66 @@
       "deptype": "n"
     },
     {
+      "dependent_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "referenced_stable_id": "language:plpgsql",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "referenced_stable_id": "schema:public",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_delayed_liquidations()",
+      "referenced_stable_id": "table:public.anomaly_alerts",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "referenced_stable_id": "language:plpgsql",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "referenced_stable_id": "schema:public",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_duplicate_obligation(uuid)",
+      "referenced_stable_id": "table:public.anomaly_alerts",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "referenced_stable_id": "language:plpgsql",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "referenced_stable_id": "schema:public",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_exceeds_allotment(uuid)",
+      "referenced_stable_id": "table:public.anomaly_alerts",
+      "deptype": "n"
+    },
+    {
       "dependent_stable_id": "procedure:public.detect_expenditure_spike(uuid)",
       "referenced_stable_id": "language:plpgsql",
       "deptype": "n"
@@ -58475,6 +58971,46 @@
     },
     {
       "dependent_stable_id": "procedure:public.detect_expenditure_spike(uuid)",
+      "referenced_stable_id": "table:public.anomaly_alerts",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "referenced_stable_id": "language:plpgsql",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "referenced_stable_id": "schema:public",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_missing_attachment(uuid)",
+      "referenced_stable_id": "table:public.anomaly_alerts",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_structuring(uuid)",
+      "referenced_stable_id": "language:plpgsql",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_structuring(uuid)",
+      "referenced_stable_id": "role:postgres",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_structuring(uuid)",
+      "referenced_stable_id": "schema:public",
+      "deptype": "n"
+    },
+    {
+      "dependent_stable_id": "procedure:public.detect_structuring(uuid)",
       "referenced_stable_id": "table:public.anomaly_alerts",
       "deptype": "n"
     },

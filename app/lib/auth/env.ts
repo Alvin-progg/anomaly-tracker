@@ -43,4 +43,8 @@ export const authEnv = {
   // same reasoning as backupEncryptionKey/databaseUrl above: a missing value only disables that
   // one action, not the app. Never sent to the browser.
   groqApiKey: process.env.GROQ_API_KEY,
+  // Shared secret for the cron-driven POST /api/alerts/scan-delayed-liquidations. Unset disables
+  // that endpoint (503) — manual review of overdue obligations still works, it just won't
+  // auto-flag. Mirrors backupCronSecret's reasoning exactly.
+  alertsScanSecret: process.env.ALERTS_SCAN_SECRET,
 };

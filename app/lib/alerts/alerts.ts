@@ -113,6 +113,41 @@ export async function detectExpenditureSpike(accessToken: string, obligationId: 
   }
 }
 
+const INSERT_TIME_RULES = [
+  "detect_expenditure_spike",
+  "detect_exceeds_allotment",
+  "detect_duplicate_obligation",
+  "detect_structuring",
+  "detect_missing_attachment",
+] as const;
+
+/**
+ * Runs every insert-time detection rule for a just-created obligation in parallel — none of the
+ * five reads another's output, so there's no ordering dependency. Delayed Liquidation isn't here:
+ * it can't fire at creation time (nothing about an obligation changes just by time passing), so
+ * it runs on a schedule instead — see app/api/alerts/scan-delayed-liquidations/route.ts.
+ */
+export async function detectAnomalies(accessToken: string, obligationId: string): Promise<AnomalyAlert[]> {
+  const results = await Promise.all(
+    INSERT_TIME_RULES.map(async (fn) => {
+      try {
+        const response = await fetch(`${authEnv.restUrl}/rpc/${fn}`, {
+          method: "POST",
+          headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+          body: JSON.stringify({ p_obligation_id: obligationId }),
+          cache: "no-store",
+        });
+        if (!response.ok) return null;
+        const rows = (await response.json()) as AlertRow[];
+        return rows[0] ? fromRow(rows[0]) : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return results.filter((a): a is AnomalyAlert => a !== null);
+}
+
 export interface ObligationContext {
   amount: number;
   payee: string | null;
