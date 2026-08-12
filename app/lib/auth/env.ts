@@ -16,6 +16,8 @@ export const authEnv = {
   authUrl: `${supabaseUrl}/auth/v1`,
   // Kong gateway PostgREST route, for the app's own `public` schema tables.
   restUrl: `${supabaseUrl}/rest/v1`,
+  // Kong gateway Storage route, used by app/lib/raao/attachments.ts for ORS supporting documents.
+  storageUrl: `${supabaseUrl}/storage/v1`,
   anonKey: required("SUPABASE_ANON_KEY"),
   // Bypasses RLS; grants GoTrue admin API access. Never exposed to the browser. Optional at
   // module load (unlike the vars above) so a missing key only breaks User Account Management,

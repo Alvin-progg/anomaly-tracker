@@ -4,12 +4,15 @@ export function Select({
   defaultValue,
   options,
   required,
+  onChange,
 }: {
   label?: string;
   name: string;
   defaultValue?: string;
   options: { value: string; label: string }[];
   required?: boolean;
+  /** For an uncontrolled select that still needs to drive a side-effect (e.g. a derived preview). */
+  onChange?: (value: string) => void;
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -19,6 +22,7 @@ export function Select({
         name={name}
         defaultValue={defaultValue}
         required={required}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
         className="px-3 py-2 border border-[#D1D9E6] rounded-md text-[13px] text-[#1A2033] outline-none w-full bg-white cursor-pointer"
       >
         {options.map((o) => (
