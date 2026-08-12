@@ -304,9 +304,14 @@ auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
 max_enrolled_factors = 10
 
 # Control MFA via App Authenticator (TOTP)
+# Both must stay true: the Two-Factor Authentication toggle in /admin/security is enforced by
+# app/lib/auth/mfa.ts against GoTrue's own factor endpoints, so turning these off would silently
+# disable the enrolment and OTP steps of the login flow. Changing them requires
+# `supabase stop && supabase start` — a plain restart of the app is not enough. (The "Pro plan"
+# note above is cloud plan gating and does not apply to this self-hosted CLI stack.)
 [auth.mfa.totp]
-enroll_enabled = false
-verify_enabled = false
+enroll_enabled = true
+verify_enabled = true
 
 # Configure MFA via Phone Messaging
 [auth.mfa.phone]

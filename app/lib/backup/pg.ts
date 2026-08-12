@@ -1,10 +1,12 @@
 import "server-only";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { authEnv } from "@/app/lib/auth/env";
+import { getSecuritySettings } from "@/app/lib/config/security";
 import { BACKUP_SCHEMA, type BackupRecord, type BackupType } from "./backups";
+import { activeCipher, decryptFile, encryptFile, isEncrypted } from "./crypto";
 
 /**
  * The actual backup engine: shells out to pg_dump / pg_restore rather than going through
@@ -275,6 +277,7 @@ export async function runBackup(params: {
 }): Promise<BackupOutcome> {
   let rowId: string | null = null;
   let filePath: string | null = null;
+  let plainPath: string | null = null;
 
   try {
     if (await hasRunningBackup()) {
@@ -286,15 +289,26 @@ export async function runBackup(params: {
     filePath = backupFilePath(fileName);
     await mkdir(/*turbopackIgnore: true*/ backupDir(), { recursive: true });
 
+    // The Encryption Standard setting in /admin/security picks the cipher; no BACKUP_ENCRYPTION_KEY
+    // means "none" and the dump stays plaintext, exactly as it was before this feature existed.
+    const cipher = activeCipher((await getSecuritySettings()).encryptionStandard);
+
     rowId = await insertBackupRow({
       backup_ref: ref,
       file_name: fileName,
       type: params.type,
       status: "running",
       triggered_by: params.triggeredBy,
+      encryption: cipher,
     });
 
     const version = await serverVersion();
+
+    // pg_dump has no encryption of its own, so an encrypted backup is dumped to a temporary
+    // plaintext file first and sealed on the way to its final name. The temp file is removed on
+    // both the success and failure paths — leaving one behind would defeat the whole point.
+    plainPath = cipher === "none" ? null : `${filePath}.tmp`;
+    const dumpTarget = plainPath ?? filePath;
 
     // -Fc is already compressed, so there is no gzip layer on top. The two bookkeeping tables are
     // in raao_ops and so are excluded simply by not naming that schema.
@@ -305,12 +319,20 @@ export async function runBackup(params: {
         "--no-password",
         ...DUMP_SCHEMAS.flatMap((schema) => ["-n", schema]),
         "-f",
-        filePath,
+        dumpTarget,
       ],
       DUMP_TIMEOUT_MS
     );
     if (code !== 0) throw new Error(lastLine(stderr));
 
+    if (plainPath && cipher !== "none") {
+      await encryptFile(plainPath, filePath, cipher);
+      await rm(/*turbopackIgnore: true*/ plainPath, { force: true });
+      plainPath = null;
+    }
+
+    // Size and checksum describe the file as it sits on disk — the ciphertext, when encrypted —
+    // so the pre-restore integrity check verifies what it actually reads back.
     const { size } = await stat(/*turbopackIgnore: true*/ filePath);
     const checksum = await sha256(filePath);
 
@@ -336,6 +358,7 @@ export async function runBackup(params: {
     }
     // A half-written dump is worse than none — it would pass a checksum it was never given.
     if (filePath) await rm(/*turbopackIgnore: true*/ filePath, { force: true }).catch(() => {});
+    if (plainPath) await rm(/*turbopackIgnore: true*/ plainPath, { force: true }).catch(() => {});
     return { ok: false, error: message };
   }
 }
@@ -377,26 +400,70 @@ export async function restoreBackup(params: {
       };
     }
 
-    const safety = await runBackup({ type: "safety", triggeredBy: params.triggeredBy });
-    if (!safety.ok) {
-      return { ok: false, error: `Safety backup failed, restore aborted: ${safety.error}` };
-    }
-
-    const { code, stderr } = await run(
-      "pg_restore",
-      ["--clean", "--if-exists", "--no-password", "-d", pgEnv().PGDATABASE, filePath],
-      RESTORE_TIMEOUT_MS
-    );
-    if (code !== 0) {
-      const fatal = fatalRestoreErrors(stderr);
-      if (fatal.length > 0) {
-        return { ok: false, error: withRoleHint(fatal[0]) };
+    // Decrypt before the safety dump, not after: a key that no longer matches must be found out
+    // while the database is still untouched. pg_restore cannot read from a pipe with -Fc anyway,
+    // so this needs a real file.
+    let restoreSource = filePath;
+    let decryptedPath: string | null = null;
+    if (await isEncrypted(filePath)) {
+      decryptedPath = `${filePath}.restore`;
+      try {
+        await decryptFile(filePath, decryptedPath);
+      } catch (error) {
+        await rm(/*turbopackIgnore: true*/ decryptedPath, { force: true }).catch(() => {});
+        return { ok: false, error: error instanceof Error ? error.message : "Restore failed." };
       }
+      restoreSource = decryptedPath;
     }
 
-    return { ok: true, restoredFrom: backup.backupRef, safetyRef: safety.ref };
+    try {
+      const safety = await runBackup({ type: "safety", triggeredBy: params.triggeredBy });
+      if (!safety.ok) {
+        return { ok: false, error: `Safety backup failed, restore aborted: ${safety.error}` };
+      }
+
+      const { code, stderr } = await run(
+        "pg_restore",
+        ["--clean", "--if-exists", "--no-password", "-d", pgEnv().PGDATABASE, restoreSource],
+        RESTORE_TIMEOUT_MS
+      );
+      if (code !== 0) {
+        const fatal = fatalRestoreErrors(stderr);
+        if (fatal.length > 0) {
+          return { ok: false, error: withRoleHint(fatal[0]) };
+        }
+      }
+
+      return { ok: true, restoredFrom: backup.backupRef, safetyRef: safety.ref };
+    } finally {
+      // Never leave a decrypted copy of the dump lying next to the encrypted one.
+      if (decryptedPath) await rm(/*turbopackIgnore: true*/ decryptedPath, { force: true }).catch(() => {});
+    }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Restore failed." };
+  }
+}
+
+/**
+ * Reads a dump back as a plain `-Fc` archive, decrypting it first when it was stored encrypted, so
+ * what an admin downloads is something pg_restore can actually read. This deliberately puts the
+ * plaintext dump on the wire — it is the same content the admin can already restore from the UI,
+ * and the download is admin-gated by the route.
+ */
+export async function readBackupArchive(fileName: string): Promise<Buffer> {
+  const filePath = backupFilePath(fileName);
+
+  if (!(await isEncrypted(filePath))) {
+    return readFile(/*turbopackIgnore: true*/ filePath);
+  }
+
+  // A unique temp name: two admins downloading at once must not share a scratch file.
+  const tempPath = `${filePath}.${randomUUID()}.download`;
+  try {
+    await decryptFile(filePath, tempPath);
+    return await readFile(/*turbopackIgnore: true*/ tempPath);
+  } finally {
+    await rm(/*turbopackIgnore: true*/ tempPath, { force: true }).catch(() => {});
   }
 }
 

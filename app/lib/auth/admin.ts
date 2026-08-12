@@ -95,6 +95,37 @@ export async function updateUser(
   return data as GoTrueAdminUser;
 }
 
+/**
+ * Removes every enrolled 2FA factor from an account — the recovery path for a lost or replaced
+ * authenticator, which would otherwise lock the user out permanently while the Two-Factor
+ * Authentication setting is on. The user re-enrols at their next login.
+ */
+export async function deleteUserFactors(id: string): Promise<{ removed: number } | GoTrueAdminError> {
+  const userResponse = await fetch(`${authEnv.authUrl}/admin/users/${id}`, {
+    headers: adminHeaders(),
+    cache: "no-store",
+  });
+  const user = await userResponse.json().catch(() => null);
+  if (!userResponse.ok || !user) {
+    return { error: user?.msg ?? user?.error_description ?? user?.error ?? "Failed to read the account." };
+  }
+
+  const factors = (user.factors ?? []) as { id: string }[];
+  for (const factor of factors) {
+    const response = await fetch(`${authEnv.authUrl}/admin/users/${id}/factors/${factor.id}`, {
+      method: "DELETE",
+      headers: adminHeaders(),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      return { error: data?.msg ?? data?.error_description ?? data?.error ?? "Failed to reset 2FA." };
+    }
+  }
+
+  return { removed: factors.length };
+}
+
 export async function setUserBanned(id: string, banned: boolean): Promise<GoTrueAdminUser | GoTrueAdminError> {
   const response = await fetch(`${authEnv.authUrl}/admin/users/${id}`, {
     method: "PUT",

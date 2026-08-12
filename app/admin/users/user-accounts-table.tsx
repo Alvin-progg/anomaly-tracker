@@ -9,7 +9,7 @@ import { Btn } from "@/app/components/ui/btn";
 import { Modal } from "@/app/components/ui/modal";
 import { Input } from "@/app/components/ui/input";
 import { Select } from "@/app/components/ui/select";
-import { createUserAction, toggleUserStatusAction, updateUserAction, type UserFormState } from "./actions";
+import { createUserAction, reset2faAction, toggleUserStatusAction, updateUserAction, type UserFormState } from "./actions";
 import type { AppRole } from "@/app/lib/auth/gotrue";
 
 export interface DisplayUser {
@@ -27,7 +27,13 @@ const roleOptions = [
   { value: "admin", label: "System Administrator" },
 ];
 
-export function UserAccountsTable({ users }: { users: DisplayUser[] }) {
+export function UserAccountsTable({
+  users,
+  twoFactorEnabled,
+}: {
+  users: DisplayUser[];
+  twoFactorEnabled: boolean;
+}) {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"create" | "edit" | null>(null);
   const [editingUser, setEditingUser] = useState<DisplayUser | null>(null);
@@ -132,6 +138,15 @@ export function UserAccountsTable({ users }: { users: DisplayUser[] }) {
                       >
                         Edit
                       </Btn>
+                      {twoFactorEnabled && (
+                        <form action={reset2faAction}>
+                          <input type="hidden" name="id" value={u.id} />
+                          <input type="hidden" name="email" value={u.email} />
+                          <Btn variant="secondary" small type="submit">
+                            Reset 2FA
+                          </Btn>
+                        </form>
+                      )}
                       <form action={toggleUserStatusAction}>
                         <input type="hidden" name="id" value={u.id} />
                         <input type="hidden" name="nextBanned" value={String(!u.banned)} />

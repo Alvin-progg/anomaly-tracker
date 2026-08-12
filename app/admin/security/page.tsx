@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { verifySession } from "@/app/lib/auth/dal";
 import { Header } from "@/app/components/layout/header";
+import { authEnv } from "@/app/lib/auth/env";
 import { getSecuritySettings } from "@/app/lib/config/security";
 import { PasswordPolicyForm } from "./password-policy-form";
 import { SessionAuthForm } from "./session-auth-form";
@@ -18,7 +19,7 @@ export default async function SecurityPoliciesPage() {
       <Header title="Security Policies" subtitle="Password policy, session timeout, and authentication settings" username={session.email} />
       <main className="flex-1 p-7 grid grid-cols-2 gap-5">
         <PasswordPolicyForm settings={settings} />
-        <SessionAuthForm settings={settings} />
+        <SessionAuthForm settings={settings} backupEncryptionKeySet={Boolean(authEnv.backupEncryptionKey)} />
       </main>
     </>
   );

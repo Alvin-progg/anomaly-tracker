@@ -65,13 +65,19 @@ export function PasswordPolicyForm({ settings }: { settings: SecuritySettings })
             </div>
           ))}
         </div>
-        <Input
-          label="Password Expiry (days)"
-          name="passwordExpiryDays"
-          type="number"
-          defaultValue={String(settings.passwordExpiryDays)}
-          required
-        />
+        <div className="flex flex-col gap-1">
+          <Input
+            label="Password Expiry (days)"
+            name="passwordExpiryDays"
+            type="number"
+            defaultValue={String(settings.passwordExpiryDays)}
+            required
+          />
+          <div className="text-[11px] text-[#6B7A99]">
+            Once a password is this old, the account must set a new one before it can use the system
+            again. Administrator-issued passwords always require a change at first login.
+          </div>
+        </div>
         {error && (
           <div className="px-3 py-2 bg-red-100 rounded-md text-xs text-red-800 border border-red-200">{error}</div>
         )}

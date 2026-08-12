@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { authEnv } from "@/app/lib/auth/env";
 
 export interface SecuritySettings {
@@ -61,7 +62,16 @@ function fromRow(row: SecuritySettingsRow): SecuritySettings {
   };
 }
 
-export async function getSecuritySettings(): Promise<SecuritySettings> {
+/**
+ * Read with the anon key and no bearer, because loginAction needs these values before a session
+ * exists (see the public-read RLS policy in 20260806130000_security_settings.sql).
+ *
+ * `cache: "no-store"` keeps an admin's edit from being served stale, and the React `cache()`
+ * wrapper on top collapses the several reads a single request now makes — the layout's idle
+ * timeout, verifySession's 2FA/expiry gates, and any action's password policy check — into one
+ * PostgREST round trip. Per-request memo only; it does not survive to the next request.
+ */
+export const getSecuritySettings = cache(async (): Promise<SecuritySettings> => {
   try {
     const response = await fetch(`${authEnv.restUrl}/security_settings?select=*&id=eq.1`, {
       headers: { apikey: authEnv.anonKey },
@@ -74,7 +84,7 @@ export async function getSecuritySettings(): Promise<SecuritySettings> {
   } catch {
     return DEFAULTS;
   }
-}
+});
 
 export async function updateSecuritySettings(
   accessToken: string,

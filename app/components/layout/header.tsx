@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Icon } from "./icons";
 
 export function Header({
@@ -27,6 +28,12 @@ export function Header({
             </span>
           )}
         </div>
+
+        <div className="w-px h-5 bg-[#D1D9E6]" />
+
+        <Link href="/change-password" className="text-xs font-medium text-[#2E74B5] hover:underline">
+          Change Password
+        </Link>
 
         <div className="w-px h-5 bg-[#D1D9E6]" />
 

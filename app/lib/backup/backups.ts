@@ -1,5 +1,6 @@
 import "server-only";
 import { authEnv } from "@/app/lib/auth/env";
+import type { BackupCipher } from "./crypto";
 
 /**
  * Read layer for the Backup & Recovery module. RLS on both tables is admin-gated (see
@@ -34,6 +35,8 @@ export interface BackupRecord {
   type: BackupType;
   status: BackupStatus;
   pgVersion: string | null;
+  /** Cipher the file on disk was written with — 'none' for dumps taken before encryption existed. */
+  encryption: BackupCipher;
   error: string | null;
   triggeredBy: string;
   createdAt: string;
@@ -64,6 +67,7 @@ interface BackupRow {
   type: BackupType;
   status: BackupStatus;
   pg_version: string | null;
+  encryption: BackupCipher | null;
   error: string | null;
   triggered_by: string;
   created_at: string;
@@ -90,6 +94,7 @@ function backupFromRow(row: BackupRow): BackupRecord {
     type: row.type,
     status: row.status,
     pgVersion: row.pg_version,
+    encryption: row.encryption ?? "none",
     error: row.error,
     triggeredBy: row.triggered_by,
     createdAt: row.created_at,
