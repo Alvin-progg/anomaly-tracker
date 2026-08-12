@@ -39,4 +39,12 @@ export const authEnv = {
   backupEncryptionKey: process.env.BACKUP_ENCRYPTION_KEY,
   // Unset disables app/api/backup/run — automated backups are opt-in.
   backupCronSecret: process.env.BACKUP_CRON_SECRET,
+  // Groq API key for the on-demand "Get AI Explanation" action on /personnel/alerts. Optional —
+  // same reasoning as backupEncryptionKey/databaseUrl above: a missing value only disables that
+  // one action, not the app. Never sent to the browser.
+  groqApiKey: process.env.GROQ_API_KEY,
+  // Shared secret for the cron-driven POST /api/alerts/scan-delayed-liquidations. Unset disables
+  // that endpoint (503) — manual review of overdue obligations still works, it just won't
+  // auto-flag. Mirrors backupCronSecret's reasoning exactly.
+  alertsScanSecret: process.env.ALERTS_SCAN_SECRET,
 };

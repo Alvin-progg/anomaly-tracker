@@ -20,6 +20,7 @@ import {
   type RecordStatus,
 } from "@/app/lib/raao/records";
 import { obligationAttachmentPath, uploadObligationAttachment } from "@/app/lib/raao/attachments";
+import { detectAnomalies } from "@/app/lib/alerts/alerts";
 
 export interface RaaoFormState {
   error?: string;
@@ -193,8 +194,20 @@ export async function createObligationAction(_prevState: RaaoFormState, formData
     }
   }
 
+  // Best-effort — a detection failure must never block the obligation that was already created.
+  let spikeWarning: string | undefined;
+  try {
+    const alerts = await detectAnomalies(auth.accessToken, obligationId);
+    if (alerts.length > 0) {
+      spikeWarning = `Flagged ${alerts.length} potential anomaly alert${alerts.length > 1 ? "s" : ""} for review: ${alerts.map((a) => a.alertRef).join(", ")}.`;
+    }
+  } catch {
+    // ignore — detection is not part of the obligation's own success/failure path
+  }
+
   revalidatePath(REVALIDATE_PATH);
-  return warning ? { warning } : {};
+  const combinedWarning = warning ?? spikeWarning;
+  return combinedWarning ? { warning: combinedWarning } : {};
 }
 
 export async function createLiquidationAction(_prevState: RaaoFormState, formData: FormData): Promise<RaaoFormState> {
