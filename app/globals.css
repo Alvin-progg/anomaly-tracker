@@ -29,3 +29,27 @@ body {
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
   background-size: 32px 32px;
 }
+
+/* Printable-document isolation (Document Creation: ORS/ABC) — hide everything except the one
+   .print-area node so Print/Save-as-PDF produces just the government form, not the app chrome. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    margin: 0.5in;
+  }
+}
