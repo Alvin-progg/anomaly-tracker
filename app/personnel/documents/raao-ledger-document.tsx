@@ -3,58 +3,144 @@
 import { useState } from "react";
 import { SectionCard, SectionTitle } from "@/app/components/ui/section-card";
 import { Btn } from "@/app/components/ui/btn";
-import { formatPeso } from "@/app/lib/budget/format";
 import { FieldInput, FieldSelect } from "./field-input";
+import {
+  BAND_COLOR,
+  FillerRows,
+  PaperSheet,
+  amountOrBlank,
+  amountOrDash,
+  cell,
+  cellCenter,
+  cellHead,
+  cellRight,
+  parseAmount,
+  shortDate,
+} from "@/app/components/ui/paper";
 
-interface RaaoEntry {
+/**
+ * Registry of Appropriations, Allotments and Obligations — Personal Services.
+ *
+ * From `sample/RAAO.png`. This is the widest and least table-like of the five forms, and the two
+ * things that make it so are both load-bearing:
+ *
+ *  1. The header is four rows deep. Seventeen object-of-expenditure columns sit under "Obligations
+ *     Incurred", each labelled with a name *and* its COA account code, and five of them are
+ *     themselves nested under "other personnel benefits" (all five sharing code 5-01-04-990).
+ *     See ACCOUNTS below — the columns and their codes are the registry's whole point.
+ *  2. The body is a sequence of *bands*, not a flat list of transactions. Budget and allotment
+ *     releases open a block, dated obligations accumulate under it, and three running totals close
+ *     it. The office reads the page by the colour of those bands — red for expenses, blue for
+ *     balances, green for supplemental — so the colours are data, not decoration, and globals.css
+ *     forces `print-color-adjust: exact` to stop the printer discarding them.
+ *
+ * The three total bands are computed rather than typed: TOTAL EXPENSES THIS DATE sums the entries
+ * since the previous one, TOTAL EXPENSES TO DATE is cumulative from the top of the page, and TOTAL
+ * ALLOTMENT BALANCES is everything released so far less everything obligated so far. Keying those
+ * by hand across seventeen columns is exactly where a ledger goes wrong.
+ *
+ * The TOTALS column is likewise computed as the sum of the seventeen account columns — verified
+ * against the sample's annual-budget line, whose account columns sum to its printed 3,296,825.14.
+ *
+ * Landscape. There is no signature block on this form.
+ */
+
+interface Account {
+  key: string;
+  name: string;
+  code: string;
+}
+
+/** The eight standalone accounts, then the five nested under "other personnel benefits", then the
+ *  four premium/contribution accounts. Order is the printed column order — do not re-sort. */
+const ACCOUNTS_LEAD: Account[] = [
+  { key: "salaries", name: "Salaries", code: "5-01-01-010" },
+  { key: "pera", name: "PERA", code: "5-01-02-010" },
+  { key: "repAllow", name: "rep. allow", code: "5-01-02-020" },
+  { key: "transAllow", name: "trans. Allow,", code: "5-01-02-030" },
+  { key: "clothing", name: "clothing", code: "5-01-02-040" },
+  { key: "midYearBonus", name: "mid year bonus", code: "5-01-02-990" },
+  { key: "yearEndBonus", name: "year end bonus", code: "5-02-02-140" },
+  { key: "cashGift", name: "cash gift", code: "5-01-02-150" },
+];
+
+const ACCOUNTS_OTHER_BENEFITS: Account[] = [
+  { key: "pei", name: "PEI", code: "5-01-04-990" },
+  { key: "monetization", name: "Monetization", code: "5-01-04-990" },
+  { key: "sri", name: "SRI", code: "5-01-04-990" },
+  { key: "cnai", name: "CNAI", code: "5-01-04-990" },
+  { key: "medicalAllowance", name: "medical allowance", code: "5-01-04-990" },
+];
+
+const ACCOUNTS_TRAIL: Account[] = [
+  { key: "lifeRet", name: "life & ret.", code: "5-01-03-010" },
+  { key: "pagIbig", name: "pag-ibig", code: "5-01-03-020" },
+  { key: "philHealth", name: "philhealth", code: "5-01-03-030" },
+  { key: "stateIns", name: "state ins.", code: "5-01-03-040" },
+];
+
+const ACCOUNTS: Account[] = [...ACCOUNTS_LEAD, ...ACCOUNTS_OTHER_BENEFITS, ...ACCOUNTS_TRAIL];
+
+/** Date, AO/AA, Appropriation, Allotment, Bal of Appropriation, TOTALS, then the accounts. */
+const COLS = 6 + ACCOUNTS.length;
+
+type Amounts = Record<string, string>;
+type Totals = Record<string, number>;
+
+const ZERO: Totals = Object.fromEntries(ACCOUNTS.map((a) => [a.key, 0]));
+
+function sumAmounts(a: Totals, b: Totals): Totals {
+  return Object.fromEntries(ACCOUNTS.map((acc) => [acc.key, (a[acc.key] ?? 0) + (b[acc.key] ?? 0)]));
+}
+
+function diffAmounts(a: Totals, b: Totals): Totals {
+  return Object.fromEntries(ACCOUNTS.map((acc) => [acc.key, (a[acc.key] ?? 0) - (b[acc.key] ?? 0)]));
+}
+
+function toTotals(amounts: Amounts): Totals {
+  return Object.fromEntries(ACCOUNTS.map((acc) => [acc.key, parseAmount(amounts[acc.key])]));
+}
+
+function rowTotal(totals: Totals): number {
+  return ACCOUNTS.reduce((sum, acc) => sum + (totals[acc.key] ?? 0), 0);
+}
+
+type BandKind = "budget" | "released" | "supplemental" | "entry" | "expensesThisDate" | "expensesToDate" | "allotmentBalances";
+
+interface Band {
+  kind: BandKind;
+  label: string;
   date: string;
   reference: string;
   allotment: string;
-  salaries: string;
-  pera: string;
-  repAllow: string;
-  transAllow: string;
-  lifeRet: string;
-  pagIbig: string;
-  philHealth: string;
+  amounts: Amounts;
 }
 
-interface RaaoDoc {
+/** Bands the user types figures into; the rest are derived from these. */
+const CREDIT_KINDS: BandKind[] = ["budget", "released", "supplemental"];
+const EDITABLE_KINDS: BandKind[] = [...CREDIT_KINDS, "entry"];
+
+const BAND_META: Record<BandKind, { label: string; color: string; bold: boolean }> = {
+  budget: { label: "Annual Budget", color: BAND_COLOR.budget, bold: true },
+  released: { label: "Allotment Released", color: BAND_COLOR.budget, bold: true },
+  supplemental: { label: "Supplemental Budget", color: BAND_COLOR.supplemental, bold: true },
+  entry: { label: "Obligation Entry", color: BAND_COLOR.entry, bold: false },
+  expensesThisDate: { label: "TOTAL EXPENSES THIS DATE", color: BAND_COLOR.expense, bold: true },
+  expensesToDate: { label: "TOTAL EXPENSES TO DATE", color: BAND_COLOR.expense, bold: true },
+  allotmentBalances: { label: "TOTAL ALLOTMENT BALANCES", color: BAND_COLOR.balance, bold: true },
+};
+
+function blankBand(kind: BandKind, label = ""): Band {
+  return { kind, label, date: "", reference: "", allotment: "", amounts: {} };
+}
+
+interface LedgerDoc {
   fund: string;
   fiscalYear: string;
-  annualBudget: string;
-  totalSalaries: string;
-  totalPera: string;
-  totalLifeRet: string;
-  totalPagIbig: string;
-  totalPhilHealth: string;
-  entries: RaaoEntry[];
+  fppCode: string;
+  bands: Band[];
+  pad: string;
 }
-
-const BLANK_ENTRY: RaaoEntry = {
-  date: "",
-  reference: "",
-  allotment: "",
-  salaries: "",
-  pera: "",
-  repAllow: "",
-  transAllow: "",
-  lifeRet: "",
-  pagIbig: "",
-  philHealth: "",
-};
-
-const EMPTY_DOC: RaaoDoc = {
-  fund: "General Fund",
-  fiscalYear: "",
-  annualBudget: "",
-  totalSalaries: "",
-  totalPera: "",
-  totalLifeRet: "",
-  totalPagIbig: "",
-  totalPhilHealth: "",
-  entries: [BLANK_ENTRY],
-};
 
 const FUND_OPTIONS = [
   { value: "General Fund", label: "General Fund (GF)" },
@@ -62,251 +148,343 @@ const FUND_OPTIONS = [
   { value: "20% Development Fund", label: "20% Development Fund" },
 ];
 
-const cellStyle: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px" };
-const paperFont: React.CSSProperties = { fontFamily: '"Times New Roman", Times, serif', color: "#000" };
+const EMPTY_DOC: LedgerDoc = {
+  fund: "General Fund",
+  fiscalYear: "",
+  fppCode: "",
+  bands: [blankBand("budget", "ANNUAL BUDGET CY")],
+  pad: "3",
+};
 
-function num(value: string): number {
-  const n = parseFloat(value.replace(/,/g, ""));
-  return isNaN(n) ? 0 : n;
+/**
+ * Walk the bands in printed order, resolving each computed band from the ones above it. Returns
+ * one resolved row per band so the table body is a straight map.
+ */
+function resolveBands(bands: Band[]): { band: Band; totals: Totals }[] {
+  let credited = ZERO;
+  let toDate = ZERO;
+  let sinceLastThisDate = ZERO;
+
+  return bands.map((band) => {
+    if (CREDIT_KINDS.includes(band.kind)) {
+      const totals = toTotals(band.amounts);
+      credited = sumAmounts(credited, totals);
+      return { band, totals };
+    }
+    if (band.kind === "entry") {
+      const totals = toTotals(band.amounts);
+      toDate = sumAmounts(toDate, totals);
+      sinceLastThisDate = sumAmounts(sinceLastThisDate, totals);
+      return { band, totals };
+    }
+    if (band.kind === "expensesThisDate") {
+      const totals = sinceLastThisDate;
+      sinceLastThisDate = ZERO;
+      return { band, totals };
+    }
+    if (band.kind === "expensesToDate") {
+      return { band, totals: toDate };
+    }
+    return { band, totals: diffAmounts(credited, toDate) };
+  });
 }
 
-function money(value: string | number): string {
-  const n = typeof value === "string" ? num(value) : value;
-  return n !== 0 ? formatPeso(n) : "—";
-}
+const rotated: React.CSSProperties = {
+  ...cellHead,
+  writingMode: "vertical-rl",
+  transform: "rotate(180deg)",
+  whiteSpace: "nowrap",
+  padding: "4px 1px",
+};
 
-function columnTotal(entries: RaaoEntry[], key: keyof RaaoEntry): number {
-  return entries.reduce((sum, entry) => sum + num(entry[key]), 0);
-}
+function BandRow({ band, totals }: { band: Band; totals: Totals }) {
+  const meta = BAND_META[band.kind];
+  const isEntry = band.kind === "entry";
+  const isComputed = !EDITABLE_KINDS.includes(band.kind);
+  const style: React.CSSProperties = { color: meta.color, fontWeight: meta.bold ? 700 : 400 };
 
-function Header({ text }: { text: string }) {
+  /** Computed bands print "-" in an empty column; typed bands leave it blank, as on the form. */
+  const show = (value: number) => (isComputed ? amountOrDash(value) : amountOrBlank(value));
+
+  /** A running-total band has no editable label — its caption is fixed by the form. */
+  const caption = isComputed ? meta.label : band.label;
+
   return (
-    <th style={{ ...cellStyle, background: "#1F3864", color: "#FFF", textAlign: "center", fontSize: 9 }}>{text}</th>
+    <tr style={style}>
+      {isEntry ? (
+        <>
+          <td style={cellCenter}>{shortDate(band.date)}</td>
+          <td style={cellCenter}>{band.reference}</td>
+        </>
+      ) : (
+        <td style={{ ...cellCenter, ...style }} colSpan={2}>
+          {caption}
+        </td>
+      )}
+      <td style={cell} />
+      <td style={cellRight}>{amountOrBlank(band.allotment)}</td>
+      <td style={cell} />
+      <td style={cellRight}>{show(rowTotal(totals))}</td>
+      {ACCOUNTS.map((account) => (
+        <td key={account.key} style={cellRight}>
+          {show(totals[account.key] ?? 0)}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function BandEditor({
+  band,
+  index,
+  onChange,
+  onRemove,
+  onMove,
+}: {
+  band: Band;
+  index: number;
+  onChange: (patch: Partial<Band>) => void;
+  onRemove: () => void;
+  onMove: (delta: number) => void;
+}) {
+  const meta = BAND_META[band.kind];
+  const editable = EDITABLE_KINDS.includes(band.kind);
+
+  return (
+    <div className="border border-[#D1D9E6] rounded-md p-3 flex flex-col gap-2">
+      <div className="flex justify-between items-center">
+        <span className="text-xs font-semibold" style={{ color: meta.color }}>
+          {index + 1}. {meta.label}
+        </span>
+        <div className="flex gap-1">
+          <Btn variant="ghost" small onClick={() => onMove(-1)}>
+            ↑
+          </Btn>
+          <Btn variant="ghost" small onClick={() => onMove(1)}>
+            ↓
+          </Btn>
+          <Btn variant="ghost" small onClick={onRemove}>
+            Remove
+          </Btn>
+        </div>
+      </div>
+
+      {band.kind === "entry" ? (
+        <div className="grid grid-cols-2 gap-2">
+          <FieldInput label="Date" type="date" value={band.date} onChange={(v) => onChange({ date: v })} />
+          <FieldInput
+            label="Reference (AO/AA)"
+            value={band.reference}
+            onChange={(v) => onChange({ reference: v })}
+            placeholder="100-25-01-0016"
+          />
+        </div>
+      ) : editable ? (
+        <FieldInput
+          label="Row Label"
+          value={band.label}
+          onChange={(v) => onChange({ label: v })}
+          placeholder={band.kind === "released" ? "ALLOTMENT RELEASED 1st qtr" : "ANNUAL BUDGET CY 2025"}
+        />
+      ) : (
+        <p className="text-[11px] text-[#9BA8BE]">
+          Computed from the rows above — no figures to enter.
+        </p>
+      )}
+
+      {editable && (
+        <>
+          <FieldInput label="Allotment" value={band.allotment} onChange={(v) => onChange({ allotment: v })} placeholder="0.00" />
+          <details>
+            <summary className="text-[11px] font-semibold text-[#6B7A99] cursor-pointer">
+              Obligations incurred — {ACCOUNTS.length} accounts
+            </summary>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              {ACCOUNTS.map((account) => (
+                <FieldInput
+                  key={account.key}
+                  label={`${account.name} · ${account.code}`}
+                  value={band.amounts[account.key] ?? ""}
+                  onChange={(v) => onChange({ amounts: { ...band.amounts, [account.key]: v } })}
+                  placeholder="0.00"
+                />
+              ))}
+            </div>
+          </details>
+        </>
+      )}
+    </div>
   );
 }
 
 export function RaaoLedgerDocument() {
-  const [doc, setDoc] = useState<RaaoDoc>(EMPTY_DOC);
-  const set = <K extends keyof RaaoDoc>(key: K, value: RaaoDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
-  const setEntry = (i: number, key: keyof RaaoEntry, value: string) =>
-    setDoc((prev) => {
-      const entries = [...prev.entries];
-      entries[i] = { ...entries[i], [key]: value };
-      return { ...prev, entries };
-    });
-  const addEntry = () => setDoc((prev) => ({ ...prev, entries: [...prev.entries, BLANK_ENTRY] }));
-  const removeEntry = (i: number) => setDoc((prev) => ({ ...prev, entries: prev.entries.filter((_, idx) => idx !== i) }));
+  const [doc, setDoc] = useState<LedgerDoc>(EMPTY_DOC);
+  const set = <K extends keyof LedgerDoc>(key: K, value: LedgerDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
-  const totalObligations = columnTotal(doc.entries, "allotment");
+  const addBand = (kind: BandKind) => set("bands", [...doc.bands, blankBand(kind)]);
+
+  const moveBand = (i: number, delta: number) => {
+    const target = i + delta;
+    if (target < 0 || target >= doc.bands.length) return;
+    const next = [...doc.bands];
+    [next[i], next[target]] = [next[target], next[i]];
+    set("bands", next);
+  };
+
+  const resolved = resolveBands(doc.bands);
 
   return (
     <div className="grid md:grid-cols-[420px_1fr] gap-5 items-start">
       <div className="no-print flex flex-col gap-3.5">
         <SectionCard>
-          <SectionTitle>Document Details</SectionTitle>
+          <SectionTitle>Registry Details</SectionTitle>
           <div className="flex flex-col gap-3">
             <FieldSelect label="Fund Classification" value={doc.fund} onChange={(v) => set("fund", v)} options={FUND_OPTIONS} />
-            <FieldInput label="Fiscal Year" value={doc.fiscalYear} onChange={(v) => set("fiscalYear", v)} placeholder="2025" />
-          </div>
-        </SectionCard>
-
-        <SectionCard>
-          <SectionTitle>Annual Budget by PS Category</SectionTitle>
-          <div className="flex flex-col gap-3">
-            <FieldInput
-              label="Total Annual Budget (₱)"
-              value={doc.annualBudget}
-              onChange={(v) => set("annualBudget", v)}
-              placeholder="Total appropriation for the year"
-            />
             <div className="grid grid-cols-2 gap-2">
-              <FieldInput label="Salaries (₱)" value={doc.totalSalaries} onChange={(v) => set("totalSalaries", v)} placeholder="0.00" />
-              <FieldInput label="PERA (₱)" value={doc.totalPera} onChange={(v) => set("totalPera", v)} placeholder="0.00" />
-              <FieldInput
-                label="Life & Retirement Ins. (₱)"
-                value={doc.totalLifeRet}
-                onChange={(v) => set("totalLifeRet", v)}
-                placeholder="0.00"
-              />
-              <FieldInput label="Pag-IBIG (₱)" value={doc.totalPagIbig} onChange={(v) => set("totalPagIbig", v)} placeholder="0.00" />
-              <FieldInput
-                label="PhilHealth (₱)"
-                value={doc.totalPhilHealth}
-                onChange={(v) => set("totalPhilHealth", v)}
-                placeholder="0.00"
-              />
+              <FieldInput label="Fiscal Year" value={doc.fiscalYear} onChange={(v) => set("fiscalYear", v)} placeholder="2025" />
+              <FieldInput label="F.P.P. Code" value={doc.fppCode} onChange={(v) => set("fppCode", v)} placeholder="1071" />
             </div>
           </div>
         </SectionCard>
 
         <SectionCard>
-          <SectionTitle>Obligation / Allotment Transactions</SectionTitle>
+          <SectionTitle>Ledger Rows</SectionTitle>
           <div className="flex flex-col gap-3">
-            {doc.entries.map((entry, i) => (
-              <div key={i} className="border border-[#D1D9E6] rounded-md p-3 flex flex-col gap-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-semibold text-[#6B7A99]">Entry {i + 1}</span>
-                  {doc.entries.length > 1 && (
-                    <Btn variant="ghost" small onClick={() => removeEntry(i)}>
-                      Remove
-                    </Btn>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <FieldInput label="Date" type="date" value={entry.date} onChange={(v) => setEntry(i, "date", v)} />
-                  <FieldInput
-                    label="Reference (AO/AA Number)"
-                    value={entry.reference}
-                    onChange={(v) => setEntry(i, "reference", v)}
-                    placeholder="100-25-01-XXXX"
-                  />
-                </div>
-                <FieldInput
-                  label="Allotment / Obligation Amount (₱)"
-                  value={entry.allotment}
-                  onChange={(v) => setEntry(i, "allotment", v)}
-                  placeholder="Total amount"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <FieldInput label="Salaries (₱)" value={entry.salaries} onChange={(v) => setEntry(i, "salaries", v)} placeholder="0.00" />
-                  <FieldInput label="PERA (₱)" value={entry.pera} onChange={(v) => setEntry(i, "pera", v)} placeholder="0.00" />
-                  <FieldInput
-                    label="Rep. Allow. (₱)"
-                    value={entry.repAllow}
-                    onChange={(v) => setEntry(i, "repAllow", v)}
-                    placeholder="0.00"
-                  />
-                  <FieldInput
-                    label="Trans. Allow. (₱)"
-                    value={entry.transAllow}
-                    onChange={(v) => setEntry(i, "transAllow", v)}
-                    placeholder="0.00"
-                  />
-                  <FieldInput
-                    label="Life & Ret. (₱)"
-                    value={entry.lifeRet}
-                    onChange={(v) => setEntry(i, "lifeRet", v)}
-                    placeholder="0.00"
-                  />
-                  <FieldInput label="Pag-IBIG (₱)" value={entry.pagIbig} onChange={(v) => setEntry(i, "pagIbig", v)} placeholder="0.00" />
-                  <FieldInput
-                    label="PhilHealth (₱)"
-                    value={entry.philHealth}
-                    onChange={(v) => setEntry(i, "philHealth", v)}
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
+            {doc.bands.map((band, i) => (
+              <BandEditor
+                key={i}
+                band={band}
+                index={i}
+                onChange={(patch) => set("bands", doc.bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b)))}
+                onRemove={() => set("bands", doc.bands.filter((_, idx) => idx !== i))}
+                onMove={(delta) => moveBand(i, delta)}
+              />
             ))}
           </div>
-          <Btn variant="ghost" small onClick={addEntry} className="mt-3">
-            + Add Row
-          </Btn>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Btn variant="ghost" small onClick={() => addBand("released")}>
+              + Allotment Released
+            </Btn>
+            <Btn variant="ghost" small onClick={() => addBand("entry")}>
+              + Obligation
+            </Btn>
+            <Btn variant="ghost" small onClick={() => addBand("supplemental")}>
+              + Supplemental
+            </Btn>
+            <Btn variant="ghost" small onClick={() => addBand("expensesThisDate")}>
+              + Expenses This Date
+            </Btn>
+            <Btn variant="ghost" small onClick={() => addBand("expensesToDate")}>
+              + Expenses To Date
+            </Btn>
+            <Btn variant="ghost" small onClick={() => addBand("allotmentBalances")}>
+              + Allotment Balances
+            </Btn>
+          </div>
+
+          <div className="mt-3 w-28">
+            <FieldInput label="Blank rows" value={doc.pad} onChange={(v) => set("pad", v)} placeholder="3" />
+          </div>
         </SectionCard>
 
         <Btn onClick={() => window.print()}>Print / Save as PDF</Btn>
       </div>
 
-      <div>
-        <div className="no-print text-[13px] font-bold text-[#1F3864] uppercase tracking-wider mb-3.5">Live Preview</div>
-        <div className="print-area bg-white border border-[#D1D9E6] rounded-lg overflow-hidden">
-          <div style={{ ...paperFont, padding: "28px 20px", fontSize: 10, background: "#FFF" }}>
-            <div style={{ textAlign: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>Republic of the Philippines</div>
-              <div>Province of Batangas · Municipality of San Pascual</div>
-              <div>Municipal Budget Office</div>
-              <div style={{ marginTop: 10, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Registry of Appropriations, Allotments and Obligations
-              </div>
-              <div style={{ fontSize: 10, marginTop: 2 }}>
-                Personal Services — {doc.fund} — FY {doc.fiscalYear || "____"}
-              </div>
-            </div>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", fontSize: 9, width: "100%", minWidth: 760 }}>
-                <thead>
-                  <tr>
-                    <Header text="Date" />
-                    <Header text="Reference (AO/AA)" />
-                    <Header text="Allotment" />
-                    <Header text="Bal. of Appropriation" />
-                    <Header text="Salaries" />
-                    <Header text="PERA" />
-                    <Header text="Rep. Allow." />
-                    <Header text="Trans. Allow." />
-                    <Header text="Life & Ret." />
-                    <Header text="Pag-IBIG" />
-                    <Header text="PhilHealth" />
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style={{ fontWeight: 700, background: "#E8ECF1" }}>
-                    <td style={cellStyle}>—</td>
-                    <td style={cellStyle}>ANNUAL BUDGET CY {doc.fiscalYear || "____"}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.annualBudget)}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.annualBudget)}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.totalSalaries)}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.totalPera)}</td>
-                    <td style={cellStyle}>—</td>
-                    <td style={cellStyle}>—</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.totalLifeRet)}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.totalPagIbig)}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(doc.totalPhilHealth)}</td>
-                  </tr>
-
-                  {doc.entries.map((entry, i) => (
-                    <tr key={i}>
-                      <td style={cellStyle}>{entry.date || " "}</td>
-                      <td style={cellStyle}>{entry.reference || " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.allotment ? money(entry.allotment) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.allotment ? money(entry.allotment) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.salaries ? money(entry.salaries) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.pera ? money(entry.pera) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.repAllow ? money(entry.repAllow) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.transAllow ? money(entry.transAllow) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.lifeRet ? money(entry.lifeRet) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.pagIbig ? money(entry.pagIbig) : " "}</td>
-                      <td style={{ ...cellStyle, textAlign: "right" }}>{entry.philHealth ? money(entry.philHealth) : " "}</td>
-                    </tr>
-                  ))}
-
-                  <tr style={{ fontWeight: 700, background: "#1F3864", color: "#FFF" }}>
-                    <td style={cellStyle}>—</td>
-                    <td style={cellStyle}>TOTAL OBLIGATIONS</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(totalObligations)}</td>
-                    <td style={cellStyle}>—</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "salaries"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "pera"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "repAllow"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "transAllow"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "lifeRet"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "pagIbig"))}</td>
-                    <td style={{ ...cellStyle, textAlign: "right" }}>{money(columnTotal(doc.entries, "philHealth"))}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, fontSize: 10 }}>
-              <div>
-                <div style={{ marginBottom: 28 }}>Prepared by:</div>
-                <div style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
-                  <div style={{ fontWeight: 700 }}>________________________________</div>
-                  <div>Budget Personnel</div>
-                </div>
-              </div>
-              <div>
-                <div style={{ marginBottom: 28 }}>Verified by:</div>
-                <div style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
-                  <div style={{ fontWeight: 700 }}>Merlita M. Yuncion</div>
-                  <div>Municipal Budget Officer</div>
-                </div>
-              </div>
+      <PaperSheet orientation="landscape">
+        <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 10 }}>
+          <div style={{ width: 90, borderBottom: "1px solid #000", alignSelf: "flex-end", textAlign: "center" }}>
+            {doc.fppCode}
+          </div>
+          <div style={{ flex: 1, textAlign: "center" }}>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>Registry of Appropriations, Allotments and Obligations</div>
+            <div style={{ fontSize: 11, fontWeight: 700 }}>Personal Services</div>
+            <div style={{ fontSize: 11 }}>Municipality of San Pascual</div>
+            <div style={{ fontSize: 10 }}>
+              {doc.fund}
+              {doc.fiscalYear ? ` — CY ${doc.fiscalYear}` : ""}
             </div>
           </div>
+          <div style={{ width: 150, border: "1px solid #000", padding: "3px 6px", textAlign: "center", fontSize: 9 }}>
+            MUNICIPAL BUDGET OFFICE
+          </div>
         </div>
-      </div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 7, tableLayout: "fixed" }}>
+          <colgroup>
+            <col style={{ width: "5%" }} />
+            <col style={{ width: "8%" }} />
+            <col style={{ width: "3%" }} />
+            <col style={{ width: "6%" }} />
+            <col style={{ width: "3%" }} />
+            <col style={{ width: "6%" }} />
+            {ACCOUNTS.map((account) => (
+              <col key={account.key} style={{ width: `${69 / ACCOUNTS.length}%` }} />
+            ))}
+          </colgroup>
+          <thead>
+            <tr>
+              <th style={cellHead} rowSpan={4}>
+                Date
+              </th>
+              <th style={cellHead}>Reference</th>
+              <th style={rotated} rowSpan={4}>
+                Appropriation
+              </th>
+              <th style={cellHead} rowSpan={4}>
+                Allotment
+              </th>
+              <th style={rotated} rowSpan={4}>
+                Bal of Appropriation
+              </th>
+              <th style={cellHead} rowSpan={4}>
+                TOTALS
+              </th>
+              <th style={cellHead} colSpan={ACCOUNTS.length}>
+                Obligations Incurred
+              </th>
+            </tr>
+            <tr>
+              <th style={cellHead} rowSpan={3}>
+                AO/AA/
+              </th>
+              {ACCOUNTS_LEAD.map((account) => (
+                <th key={account.key} style={cellHead} rowSpan={2}>
+                  {account.name}
+                </th>
+              ))}
+              <th style={cellHead} colSpan={ACCOUNTS_OTHER_BENEFITS.length}>
+                other personnel benefits
+              </th>
+              {ACCOUNTS_TRAIL.map((account) => (
+                <th key={account.key} style={cellHead} rowSpan={2}>
+                  {account.name}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {ACCOUNTS_OTHER_BENEFITS.map((account) => (
+                <th key={account.key} style={cellHead}>
+                  {account.name}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {ACCOUNTS.map((account) => (
+                <th key={account.key} style={{ ...cellHead, fontWeight: 400 }}>
+                  {account.code}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {resolved.map(({ band, totals }, i) => (
+              <BandRow key={i} band={band} totals={totals} />
+            ))}
+            <FillerRows count={parseAmount(doc.pad)} cols={COLS} />
+          </tbody>
+        </table>
+      </PaperSheet>
     </div>
   );
 }
