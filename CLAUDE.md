@@ -27,6 +27,22 @@ view without `security_invoker` would run as its owner and bypass RLS. Read help
 that one file; unlike the mock it reconciles (per-department and per-fund breakdowns both total
 the ₱22.45M headline, and no department is obligated past its release).
 
+**One fiscal year is active at a time** (`public.fiscal_years`, partial unique index
+`fiscal_years_one_active`), and `getActiveFiscalYear()` in `app/lib/config/fiscal-years.ts` is the
+only entry point — it and `getFiscalYears()` are wrapped in React `cache()` for the same reason
+`getSecuritySettings()` is. Never derive a fiscal year from the clock: the footer used to print
+`new Date().getFullYear()` and sat under a dashboard showing the real one. Scoped to the active
+year: Dashboard and Budget Monitoring (via the three views), RAAO Records, and Report Generation's
+Fiscal Year filter, which defaults to it and offers "All fiscal years". Deliberately **not** scoped:
+Archives, which exists to search closed years, and AI Anomaly Alerts, since `anomaly_alerts` has no
+`fiscal_year_id`. `liquidations` has no such column either and reaches its year through the parent
+obligation, so `listRecords` filters that tab with an `obligations!inner` join.
+
+Anything rendered inside a `.print-area` follows the paper rules in `app/components/ui/paper.tsx`:
+bare grouped figures, **no `₱` in a table cell**, a plain hyphen for nil. `formatPeso` is for
+on-screen chrome; `formatAmount` is for paper. That applies to the report tables too — they print
+on the same surface.
+
 Charts are **recharts** in client components under `app/components/charts/`. Colours come from
 `app/components/charts/palette.ts`, not the UI navy — the interface palette's three blues are
 indistinguishable to a colour-blind reader, which is fine for chrome and wrong for encoding

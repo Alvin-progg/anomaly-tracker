@@ -14,6 +14,7 @@ import {
   cellRight,
   longDate,
   parseAmount,
+  parseRowCount,
 } from "@/app/components/ui/paper";
 
 /**
@@ -73,15 +74,27 @@ function MoneyCells({ detail }: { detail: SefDetail }) {
   );
 }
 
-export function SefDocument() {
-  const [doc, setDoc] = useState<SefDoc>(EMPTY_DOC);
+export function SefDocument({ defaultAsOf = "" }: { defaultAsOf?: string }) {
+  const [doc, setDoc] = useState<SefDoc>({ ...EMPTY_DOC, asOf: defaultAsOf });
   const set = <K extends keyof SefDoc>(key: K, value: SefDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
+  // Derive from `prev`, not the render-scope `doc` — two updates against the same render would
+  // otherwise drop the first.
   const setItem = (i: number, patch: Partial<SefItem>) =>
-    set("items", doc.items.map((item, idx) => (idx === i ? { ...item, ...patch } : item)));
+    setDoc((prev) => ({ ...prev, items: prev.items.map((item, idx) => (idx === i ? { ...item, ...patch } : item)) }));
 
   const setDetail = (i: number, d: number, key: keyof SefDetail, value: string) =>
-    setItem(i, { details: doc.items[i].details.map((detail, idx) => (idx === d ? { ...detail, [key]: value } : detail)) });
+    setDoc((prev) => ({
+      ...prev,
+      items: prev.items.map((item, idx) =>
+        idx === i
+          ? { ...item, details: item.details.map((detail, j) => (j === d ? { ...detail, [key]: value } : detail)) }
+          : item
+      ),
+    }));
+
+  const removeItem = (i: number) => setDoc((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }));
+  const addItem = () => setDoc((prev) => ({ ...prev, items: [...prev.items, BLANK_ITEM] }));
 
   const totals = detailsIn(doc.items).reduce(
     (acc, detail) => ({
@@ -106,9 +119,11 @@ export function SefDocument() {
               <div key={i} className="border border-[#D1D9E6] rounded-md p-3 flex flex-col gap-2">
                 <div className="flex justify-between items-center">
                   <span className="text-xs font-semibold text-[#6B7A99]">Project {i + 1}</span>
-                  <Btn variant="ghost" small onClick={() => set("items", doc.items.filter((_, idx) => idx !== i))}>
-                    Remove
-                  </Btn>
+                  {doc.items.length > 1 && (
+                    <Btn variant="ghost" small onClick={() => removeItem(i)}>
+                      Remove
+                    </Btn>
+                  )}
                 </div>
                 <FieldInput
                   label="Object of Expenditure"
@@ -160,7 +175,7 @@ export function SefDocument() {
             ))}
           </div>
           <div className="mt-3 flex items-end gap-3">
-            <Btn variant="ghost" small onClick={() => set("items", [...doc.items, BLANK_ITEM])}>
+            <Btn variant="ghost" small onClick={addItem}>
               + Add Project
             </Btn>
             <div className="w-28">
@@ -208,7 +223,7 @@ export function SefDocument() {
                 ))}
               </Fragment>
             ))}
-            <FillerRows count={parseAmount(doc.pad)} cols={COLS} />
+            <FillerRows count={parseRowCount(doc.pad, 2)} cols={COLS} />
             <tr style={{ fontWeight: 700 }}>
               <td style={{ ...cell, textAlign: "center", fontSize: 11 }}>TOTAL CONTINUING PROJECTS</td>
               <td style={cellRight}>{amountOrDash(totals.appropriation)}</td>

@@ -1,6 +1,6 @@
 import "server-only";
 import { authEnv } from "@/app/lib/auth/env";
-import { getFiscalYears } from "@/app/lib/config/fiscal-years";
+import { getActiveFiscalYear } from "@/app/lib/config/fiscal-years";
 
 /**
  * Read/write layer for the RAAO Record Management module (/personnel/raao) — the create/edit
@@ -27,6 +27,14 @@ export interface RaaoRecord {
   attachmentPath: string | null;
   /** Liquidations only — the parent obligation's reference. */
   obligationRef: string | null;
+  /**
+   * Liquidations have no `fiscal_year_id` column of their own (see 20260812140000_raao_records.sql)
+   * and inherit one through the parent obligation, so `fiscalYearId` comes from the join there and
+   * `fiscalYearLabel` stays null on that tab. Everything else carries both, so a client-side filter
+   * can scope by year without a round trip — see app/lib/reports/aggregate.ts.
+   */
+  fiscalYearId: string | null;
+  fiscalYearLabel: string | null;
 }
 
 export interface Department {
@@ -63,6 +71,9 @@ interface JoinedFund {
 interface JoinedDepartment {
   name: string;
 }
+interface JoinedFiscalYear {
+  label: string;
+}
 interface RecordRow {
   id: string;
   ref: string;
@@ -72,10 +83,13 @@ interface RecordRow {
   record_date: string;
   payee?: string | null;
   attachment_path?: string | null;
+  fiscal_year_id?: string | null;
+  fiscal_years?: JoinedFiscalYear | null;
   fund_classifications?: JoinedFund | null;
   departments?: JoinedDepartment | null;
   obligations?: {
     ref: string;
+    fiscal_year_id?: string | null;
     fund_classifications: JoinedFund | null;
     departments: JoinedDepartment | null;
   } | null;
@@ -97,22 +111,61 @@ function fromRow(row: RecordRow): RaaoRecord {
     payee: row.payee ?? null,
     attachmentPath: row.attachment_path ?? null,
     obligationRef: row.obligations?.ref ?? null,
+    fiscalYearId: row.fiscal_year_id ?? row.obligations?.fiscal_year_id ?? null,
+    fiscalYearLabel: row.fiscal_years?.label ?? null,
   };
 }
 
-function selectFor(tab: RaaoTab): string {
-  return tab === "liquidations"
-    ? "select=*,obligations(ref,fund_classifications(name,short_code),departments(name))"
-    : "select=*,fund_classifications(name,short_code),departments(name)";
+/**
+ * `scoped` switches the liquidations join to `!inner`, which is what lets a fiscal-year filter on
+ * the embedded obligation actually exclude rows — an outer join would keep the liquidation and
+ * merely null out the obligation. Liquidations have no `fiscal_year_id` of their own; they reach a
+ * year only through their parent.
+ */
+function selectFor(tab: RaaoTab, scoped: boolean): string {
+  if (tab === "liquidations") {
+    const join = scoped ? "obligations!inner" : "obligations";
+    return `select=*,${join}(ref,fiscal_year_id,fund_classifications(name,short_code),departments(name))`;
+  }
+  return "select=*,fiscal_years(label),fund_classifications(name,short_code),departments(name)";
 }
 
-export async function listRecords(
+export interface ListRecordsOptions {
+  search?: string;
+  limit?: number;
+  /**
+   * Scope to one fiscal year. Left unset by Archives, whose whole job is cross-year historical
+   * search; set by RAAO Records and Reports so what they show matches where new records land.
+   * Ignored for liquidations — that table has no fiscal_year_id column.
+   */
+  fiscalYearId?: string;
+}
+
+export interface RecordPage {
+  records: RaaoRecord[];
+  /**
+   * True when the server had more rows than `limit`. We ask for `limit + 1` and drop the extra, so
+   * one request tells us both the page and whether it is the whole story — a report that silently
+   * omits rows under-reports its totals, which is worse than one that says it is partial.
+   */
+  truncated: boolean;
+}
+
+export async function listRecordsPage(
   accessToken: string,
   tab: RaaoTab,
-  options: { search?: string; limit?: number } = {}
-): Promise<RaaoRecord[]> {
-  const params = [selectFor(tab), "order=record_date.desc"];
-  if (options.limit) params.push(`limit=${options.limit}`);
+  options: ListRecordsOptions = {}
+): Promise<RecordPage> {
+  const scoped = Boolean(options.fiscalYearId);
+  const params = [selectFor(tab, scoped), "order=record_date.desc"];
+  if (options.limit) params.push(`limit=${options.limit + 1}`);
+  if (options.fiscalYearId) {
+    params.push(
+      tab === "liquidations"
+        ? `obligations.fiscal_year_id=eq.${options.fiscalYearId}`
+        : `fiscal_year_id=eq.${options.fiscalYearId}`
+    );
+  }
   const search = options.search?.trim();
   if (search) {
     const term = search.replace(/[,()]/g, "");
@@ -124,18 +177,28 @@ export async function listRecords(
       headers: authHeaders(accessToken),
       cache: "no-store",
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { records: [], truncated: false };
     const rows = (await response.json()) as RecordRow[];
-    return rows.map(fromRow);
+    const truncated = options.limit !== undefined && rows.length > options.limit;
+    const page = truncated ? rows.slice(0, options.limit) : rows;
+    return { records: page.map(fromRow), truncated };
   } catch {
-    return [];
+    return { records: [], truncated: false };
   }
+}
+
+export async function listRecords(
+  accessToken: string,
+  tab: RaaoTab,
+  options: ListRecordsOptions = {}
+): Promise<RaaoRecord[]> {
+  return (await listRecordsPage(accessToken, tab, options)).records;
 }
 
 export async function getRecordById(accessToken: string, tab: RaaoTab, id: string): Promise<RaaoRecord | null> {
   try {
     const response = await fetch(
-      `${authEnv.restUrl}/${TABLE[tab]}?${selectFor(tab)}&id=eq.${id}&limit=1`,
+      `${authEnv.restUrl}/${TABLE[tab]}?${selectFor(tab, false)}&id=eq.${id}&limit=1`,
       { headers: authHeaders(accessToken), cache: "no-store" }
     );
     if (!response.ok) return null;
@@ -160,10 +223,19 @@ export async function getDepartments(accessToken: string): Promise<Department[]>
   }
 }
 
-export async function listObligationsForPicker(accessToken: string): Promise<ObligationOption[]> {
+/**
+ * Parent-obligation picker for the liquidation form. `fiscalYearId` matters here: a liquidation
+ * carries no fiscal year of its own, so it silently inherits its parent's — offering obligations
+ * from a closed year is how you end up booking against one.
+ */
+export async function listObligationsForPicker(
+  accessToken: string,
+  fiscalYearId?: string
+): Promise<ObligationOption[]> {
+  const scope = fiscalYearId ? `&fiscal_year_id=eq.${fiscalYearId}` : "";
   try {
     const response = await fetch(
-      `${authEnv.restUrl}/obligations?select=id,ref,fund_classifications(name,short_code),departments(name)&order=ref.desc&limit=200`,
+      `${authEnv.restUrl}/obligations?select=id,ref,fund_classifications(name,short_code),departments(name)${scope}&order=ref.desc&limit=200`,
       { headers: authHeaders(accessToken), cache: "no-store" }
     );
     if (!response.ok) return [];
@@ -187,8 +259,7 @@ export async function listObligationsForPicker(accessToken: string): Promise<Obl
 
 /** The dashboard views scope to this same "one active fiscal year" invariant. */
 export async function getActiveFiscalYearId(): Promise<string | null> {
-  const years = await getFiscalYears();
-  return years.find((year) => year.status === "active")?.id ?? null;
+  return (await getActiveFiscalYear())?.id ?? null;
 }
 
 async function postJson(

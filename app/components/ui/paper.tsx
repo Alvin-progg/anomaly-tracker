@@ -18,7 +18,7 @@
 
 import { formatAmount } from "@/app/lib/budget/format";
 
-export const paperFont: React.CSSProperties = {
+const paperFont: React.CSSProperties = {
   fontFamily: '"Times New Roman", Times, serif',
   color: "#000",
 };
@@ -50,6 +50,16 @@ export const BAND_COLOR = {
   entry: "#000000",
 } as const;
 
+/**
+ * Row counts, not money. `parseAmount` used to read the "Blank rows" fields, which meant `1e4`
+ * rendered ten thousand rows and `2.7` rendered two.
+ */
+export function parseRowCount(value: string, fallback = 0): number {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(n, 60);
+}
+
 /** Blank/garbage tolerant — a partly-filled form is the normal case while typing. */
 export function parseAmount(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -59,7 +69,7 @@ export function parseAmount(value: string | number | null | undefined): number {
 }
 
 /** Grouped to 2 dp with no currency symbol: `3,296,825.14`. */
-export const groupAmount = formatAmount;
+const groupAmount = formatAmount;
 
 /**
  * A cell the user types into. Empty stays empty — the scans leave unfilled cells blank rather
@@ -146,28 +156,6 @@ export function PaperSheet({
       >
         <div style={{ ...paperFont, padding: "28px 32px", fontSize: 10, background: "#FFF" }}>{children}</div>
       </div>
-    </div>
-  );
-}
-
-/** Centred title stack. `lines[0]` is the form's own title, the rest are its subtitles. */
-export function PaperTitle({ lines }: { lines: (string | null)[] }) {
-  return (
-    <div style={{ textAlign: "center", marginBottom: 14 }}>
-      {lines
-        .filter((line): line is string => Boolean(line))
-        .map((line, i) => (
-          <div
-            key={i}
-            style={
-              i === 0
-                ? { fontSize: 13, fontWeight: 700, letterSpacing: "0.02em" }
-                : { fontSize: 11, fontWeight: i === 1 ? 700 : 400 }
-            }
-          >
-            {line}
-          </div>
-        ))}
     </div>
   );
 }

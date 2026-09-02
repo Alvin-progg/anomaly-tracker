@@ -5,7 +5,7 @@ import { verifySession } from "@/app/lib/auth/dal";
 import { getAccessToken } from "@/app/lib/auth/session";
 import { recordAuditEvent } from "@/app/lib/tracking/tracking";
 import { updateSystemSettings, type SystemSettings } from "@/app/lib/config/settings";
-import { createFiscalYear, activateFiscalYear } from "@/app/lib/config/fiscal-years";
+import { createFiscalYear, activateFiscalYear, getFiscalYears } from "@/app/lib/config/fiscal-years";
 import { createFinancialThreshold, updateFinancialThreshold } from "@/app/lib/config/thresholds";
 import { isThresholdModule, isThresholdType } from "@/app/lib/config/threshold-types";
 import {
@@ -139,12 +139,18 @@ export async function createFiscalYearAction(
   return {};
 }
 
-export async function activateFiscalYearAction(id: string, label: string): Promise<{ error?: string }> {
+/**
+ * The audit label is resolved from the id server-side rather than taken from the caller: the client
+ * used to pass it, which meant a crafted call could log any label it liked against a real id.
+ */
+export async function activateFiscalYearAction(id: string): Promise<{ error?: string }> {
   const admin = await requireAdmin();
   if (!admin.session) return { error: admin.error };
 
   const result = await activateFiscalYear(admin.accessToken, id);
   if (result.error) return { error: result.error };
+
+  const label = (await getFiscalYears()).find((year) => year.id === id)?.label ?? id;
 
   await recordAuditEvent({
     accessToken: admin.accessToken,

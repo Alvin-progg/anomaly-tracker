@@ -18,7 +18,13 @@ const TABS = [
 
 type DocType = (typeof TABS)[number]["key"];
 
-export function DocumentsContent() {
+export function DocumentsContent({
+  fiscalYearLabel,
+  fiscalYearEnd,
+}: {
+  fiscalYearLabel: string;
+  fiscalYearEnd: string;
+}) {
   const [docType, setDocType] = useState<DocType>("ors");
 
   return (
@@ -38,11 +44,27 @@ export function DocumentsContent() {
         ))}
       </div>
 
-      {docType === "ors" && <OrsDocument />}
-      {docType === "abc" && <AbcDocument />}
-      {docType === "saao" && <SaaoDocument />}
-      {docType === "sef" && <SefDocument />}
-      {docType === "raao" && <RaaoLedgerDocument />}
+      {/*
+        Every form stays mounted and the inactive ones are hidden with CSS. Rendering only the
+        active tab unmounted the others, silently discarding everything typed — worst on the RAAO
+        registry, which can hold 23 columns across many bands. `hidden` also keeps the inactive
+        forms out of the print output, which relies on there being one visible `.print-area`.
+      */}
+      <div hidden={docType !== "ors"}>
+        <OrsDocument />
+      </div>
+      <div hidden={docType !== "abc"}>
+        <AbcDocument />
+      </div>
+      <div hidden={docType !== "saao"}>
+        <SaaoDocument defaultAsOf={fiscalYearEnd} />
+      </div>
+      <div hidden={docType !== "sef"}>
+        <SefDocument defaultAsOf={fiscalYearEnd} />
+      </div>
+      <div hidden={docType !== "raao"}>
+        <RaaoLedgerDocument defaultFiscalYear={fiscalYearLabel} />
+      </div>
     </div>
   );
 }
