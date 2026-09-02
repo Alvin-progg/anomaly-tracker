@@ -30,36 +30,65 @@ body {
   background-size: 32px 32px;
 }
 
-/* Printable-document isolation (Document Creation, Report Generation) — hide everything except
-   the one .print-area node so Print/Save-as-PDF produces just the government form, not the app
-   chrome. Hiding is `visibility`, not `display`, because the .print-area's ancestors have to stay
-   in the box tree for it to be positioned at all. */
+/* Printable-document isolation (Document Creation, Report Generation) — print just the one
+   .print-area node, not the app chrome around it.
+
+   The page is reflowed rather than hidden: every ancestor of the print-area is flattened to a
+   plain full-width block and every *sibling* along that chain is removed with `display: none`.
+   The earlier approach — `visibility: hidden` on everything plus `position: absolute` on the
+   print-area — took the form out of the normal flow, and a named `@page` does not apply to an
+   out-of-flow box, so the landscape rule below was silently inert. Keeping the form in flow is
+   what makes `page:` work. */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  .print-area,
-  .print-area * {
-    visibility: visible;
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
   }
 
-  /* AppShell scrolls its own body and every paper wrapper is `overflow-hidden`; either one clips
-     an absolutely-positioned print-area to a single page, which is what truncated the multi-page
-     RAAO registry. Unwind the whole ancestor chain rather than guessing which link clipped. */
-  html,
-  body,
-  body * {
+  /* Document Creation keeps all five forms mounted so switching tabs does not discard typed data,
+     hiding the inactive ones with the `hidden` attribute. Their wrappers are ancestors of a
+     `.print-area` too, so they must be excluded from the flatten rule below — otherwise its
+     `display: block !important` overrides `hidden` and every form prints at once. */
+  body [hidden] {
+    display: none !important;
+  }
+
+  /* Collapse the shell: the print-area's ancestors become transparent full-width blocks, so no
+     flex sizing, scroll container or rounded card frame survives to clip or letterbox the form. */
+  body :has(.print-area):not([hidden]) {
+    display: block !important;
+    position: static !important;
     overflow: visible !important;
+    height: auto !important;
     max-height: none !important;
+    width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* Everything that is neither an ancestor nor part of the form itself. */
+  body *:not(:has(.print-area)):not(.print-area):not(.print-area *) {
+    display: none !important;
+  }
+
+  /* A hidden wrapper's own subtree would otherwise still match ".print-area *" and reappear. */
+  body [hidden] .print-area,
+  body [hidden] .print-area * {
+    display: none !important;
   }
 
   .print-area {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
+    display: block !important;
+    width: 100% !important;
     border: 0 !important;
     border-radius: 0 !important;
+    overflow: visible !important;
     /* The RAAO registry's red/blue/green total bands are load-bearing — the budget office reads
        the page by colour — so they must survive the printer's default de-inking. */
     -webkit-print-color-adjust: exact;
@@ -75,8 +104,9 @@ body {
   }
 
   /* The RAAO registry and the ABC are landscape on paper (see sample/RAAO.png and
-     sample/"Approved Budget For the contract.png") and clip at the right edge on a portrait
-     sheet. Named page, opted into per form via `.print-area.landscape`. */
+     sample/"Approved Budget For the contract.png") and clip at the right edge on a portrait sheet.
+     Named pages are Chromium/Firefox only; Safari falls back to portrait, where the tables still
+     scroll rather than truncate. */
   @page raao-landscape {
     size: landscape;
     margin: 0.4in;

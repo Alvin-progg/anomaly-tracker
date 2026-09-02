@@ -10,11 +10,12 @@ import {
   PaperSheet,
   amountOrBlank,
   amountOrDash,
-  cell,
   cellCenter,
   cellHead,
   cellRight,
+  MUNICIPALITY,
   parseAmount,
+  parseRowCount,
   shortDate,
 } from "@/app/components/ui/paper";
 
@@ -108,11 +109,15 @@ function rowTotal(totals: Totals): number {
 type BandKind = "budget" | "released" | "supplemental" | "entry" | "expensesThisDate" | "expensesToDate" | "allotmentBalances";
 
 interface Band {
+  /** Stable across reordering — array index cannot be a React key when rows can be moved. */
+  id: string;
   kind: BandKind;
   label: string;
   date: string;
   reference: string;
+  appropriation: string;
   allotment: string;
+  balAppropriation: string;
   amounts: Amounts;
 }
 
@@ -130,8 +135,20 @@ const BAND_META: Record<BandKind, { label: string; color: string; bold: boolean 
   allotmentBalances: { label: "TOTAL ALLOTMENT BALANCES", color: BAND_COLOR.balance, bold: true },
 };
 
+let bandSeq = 0;
 function blankBand(kind: BandKind, label = ""): Band {
-  return { kind, label, date: "", reference: "", allotment: "", amounts: {} };
+  bandSeq += 1;
+  return {
+    id: `band-${bandSeq}`,
+    kind,
+    label,
+    date: "",
+    reference: "",
+    appropriation: "",
+    allotment: "",
+    balAppropriation: "",
+    amounts: {},
+  };
 }
 
 interface LedgerDoc {
@@ -157,35 +174,59 @@ const EMPTY_DOC: LedgerDoc = {
 };
 
 /**
- * Walk the bands in printed order, resolving each computed band from the ones above it. Returns
- * one resolved row per band so the table body is a straight map.
+ * Walk the bands in printed order, resolving each computed band from the ones above it. Returns one
+ * resolved row per band so the table body is a straight map.
+ *
+ * `allotment` is carried alongside the seventeen account columns rather than ignored: a balance
+ * band's Allotment cell is the figure a budget officer actually reads off the page, and computing
+ * only the per-account columns left it blank.
  */
-function resolveBands(bands: Band[]): { band: Band; totals: Totals }[] {
+interface Resolved {
+  band: Band;
+  totals: Totals;
+  allotment: number;
+}
+
+function resolveBands(bands: Band[]): Resolved[] {
   let credited = ZERO;
+  let creditedAllotment = 0;
   let toDate = ZERO;
+  let toDateAllotment = 0;
   let sinceLastThisDate = ZERO;
+  let sinceLastThisDateAllotment = 0;
 
   return bands.map((band) => {
+    const allotment = parseAmount(band.allotment);
+
     if (CREDIT_KINDS.includes(band.kind)) {
       const totals = toTotals(band.amounts);
       credited = sumAmounts(credited, totals);
-      return { band, totals };
+      creditedAllotment += allotment;
+      return { band, totals, allotment };
     }
     if (band.kind === "entry") {
       const totals = toTotals(band.amounts);
       toDate = sumAmounts(toDate, totals);
+      toDateAllotment += allotment;
       sinceLastThisDate = sumAmounts(sinceLastThisDate, totals);
-      return { band, totals };
+      sinceLastThisDateAllotment += allotment;
+      return { band, totals, allotment };
     }
     if (band.kind === "expensesThisDate") {
       const totals = sinceLastThisDate;
+      const sum = sinceLastThisDateAllotment;
       sinceLastThisDate = ZERO;
-      return { band, totals };
+      sinceLastThisDateAllotment = 0;
+      return { band, totals, allotment: sum };
     }
     if (band.kind === "expensesToDate") {
-      return { band, totals: toDate };
+      return { band, totals: toDate, allotment: toDateAllotment };
     }
-    return { band, totals: diffAmounts(credited, toDate) };
+    return {
+      band,
+      totals: diffAmounts(credited, toDate),
+      allotment: creditedAllotment - toDateAllotment,
+    };
   });
 }
 
@@ -197,7 +238,7 @@ const rotated: React.CSSProperties = {
   padding: "4px 1px",
 };
 
-function BandRow({ band, totals }: { band: Band; totals: Totals }) {
+function BandRow({ band, totals, allotment }: Resolved) {
   const meta = BAND_META[band.kind];
   const isEntry = band.kind === "entry";
   const isComputed = !EDITABLE_KINDS.includes(band.kind);
@@ -221,9 +262,9 @@ function BandRow({ band, totals }: { band: Band; totals: Totals }) {
           {caption}
         </td>
       )}
-      <td style={cell} />
-      <td style={cellRight}>{amountOrBlank(band.allotment)}</td>
-      <td style={cell} />
+      <td style={cellRight}>{amountOrBlank(band.appropriation)}</td>
+      <td style={cellRight}>{show(allotment)}</td>
+      <td style={cellRight}>{amountOrBlank(band.balAppropriation)}</td>
       <td style={cellRight}>{show(rowTotal(totals))}</td>
       {ACCOUNTS.map((account) => (
         <td key={account.key} style={cellRight}>
@@ -232,6 +273,13 @@ function BandRow({ band, totals }: { band: Band; totals: Totals }) {
       ))}
     </tr>
   );
+}
+
+/** Placeholders carry no year: the real one arrives from `fiscal_years` via `defaultFiscalYear`. */
+function labelPlaceholder(kind: BandKind): string {
+  if (kind === "released") return "ALLOTMENT RELEASED 1st qtr";
+  if (kind === "supplemental") return "SUPPLEMENTAL BUDGET #1";
+  return "ANNUAL BUDGET CY";
 }
 
 function BandEditor({
@@ -284,17 +332,31 @@ function BandEditor({
           label="Row Label"
           value={band.label}
           onChange={(v) => onChange({ label: v })}
-          placeholder={band.kind === "released" ? "ALLOTMENT RELEASED 1st qtr" : "ANNUAL BUDGET CY 2025"}
+          placeholder={labelPlaceholder(band.kind)}
         />
       ) : (
         <p className="text-[11px] text-[#9BA8BE]">
-          Computed from the rows above — no figures to enter.
+          Computed from the rows above — figures, allotment balance and all.
         </p>
       )}
 
       {editable && (
         <>
-          <FieldInput label="Allotment" value={band.allotment} onChange={(v) => onChange({ allotment: v })} placeholder="0.00" />
+          <div className="grid grid-cols-3 gap-2">
+            <FieldInput
+              label="Appropriation"
+              value={band.appropriation}
+              onChange={(v) => onChange({ appropriation: v })}
+              placeholder="0.00"
+            />
+            <FieldInput label="Allotment" value={band.allotment} onChange={(v) => onChange({ allotment: v })} placeholder="0.00" />
+            <FieldInput
+              label="Bal. of Appropriation"
+              value={band.balAppropriation}
+              onChange={(v) => onChange({ balAppropriation: v })}
+              placeholder="0.00"
+            />
+          </div>
           <details>
             <summary className="text-[11px] font-semibold text-[#6B7A99] cursor-pointer">
               Obligations incurred — {ACCOUNTS.length} accounts
@@ -317,19 +379,32 @@ function BandEditor({
   );
 }
 
-export function RaaoLedgerDocument() {
-  const [doc, setDoc] = useState<LedgerDoc>(EMPTY_DOC);
+export function RaaoLedgerDocument({ defaultFiscalYear = "" }: { defaultFiscalYear?: string }) {
+  const [doc, setDoc] = useState<LedgerDoc>(() => ({
+    ...EMPTY_DOC,
+    fiscalYear: defaultFiscalYear,
+    bands: [blankBand("budget", defaultFiscalYear ? `ANNUAL BUDGET ${defaultFiscalYear}` : "ANNUAL BUDGET CY")],
+  }));
   const set = <K extends keyof LedgerDoc>(key: K, value: LedgerDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
-  const addBand = (kind: BandKind) => set("bands", [...doc.bands, blankBand(kind)]);
+  // All band edits derive from `prev`; reading `doc` from the render scope dropped whichever of two
+  // updates against the same render landed first.
+  const addBand = (kind: BandKind) => setDoc((prev) => ({ ...prev, bands: [...prev.bands, blankBand(kind)] }));
 
-  const moveBand = (i: number, delta: number) => {
-    const target = i + delta;
-    if (target < 0 || target >= doc.bands.length) return;
-    const next = [...doc.bands];
-    [next[i], next[target]] = [next[target], next[i]];
-    set("bands", next);
-  };
+  const patchBand = (i: number, patch: Partial<Band>) =>
+    setDoc((prev) => ({ ...prev, bands: prev.bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b)) }));
+
+  const removeBand = (i: number) =>
+    setDoc((prev) => ({ ...prev, bands: prev.bands.filter((_, idx) => idx !== i) }));
+
+  const moveBand = (i: number, delta: number) =>
+    setDoc((prev) => {
+      const target = i + delta;
+      if (target < 0 || target >= prev.bands.length) return prev;
+      const bands = [...prev.bands];
+      [bands[i], bands[target]] = [bands[target], bands[i]];
+      return { ...prev, bands };
+    });
 
   const resolved = resolveBands(doc.bands);
 
@@ -341,7 +416,7 @@ export function RaaoLedgerDocument() {
           <div className="flex flex-col gap-3">
             <FieldSelect label="Fund Classification" value={doc.fund} onChange={(v) => set("fund", v)} options={FUND_OPTIONS} />
             <div className="grid grid-cols-2 gap-2">
-              <FieldInput label="Fiscal Year" value={doc.fiscalYear} onChange={(v) => set("fiscalYear", v)} placeholder="2025" />
+              <FieldInput label="Fiscal Year" value={doc.fiscalYear} onChange={(v) => set("fiscalYear", v)} placeholder="FY 2024" />
               <FieldInput label="F.P.P. Code" value={doc.fppCode} onChange={(v) => set("fppCode", v)} placeholder="1071" />
             </div>
           </div>
@@ -352,17 +427,20 @@ export function RaaoLedgerDocument() {
           <div className="flex flex-col gap-3">
             {doc.bands.map((band, i) => (
               <BandEditor
-                key={i}
+                key={band.id}
                 band={band}
                 index={i}
-                onChange={(patch) => set("bands", doc.bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b)))}
-                onRemove={() => set("bands", doc.bands.filter((_, idx) => idx !== i))}
+                onChange={(patch) => patchBand(i, patch)}
+                onRemove={() => removeBand(i)}
                 onMove={(delta) => moveBand(i, delta)}
               />
             ))}
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
+            <Btn variant="ghost" small onClick={() => addBand("budget")}>
+              + Annual Budget
+            </Btn>
             <Btn variant="ghost" small onClick={() => addBand("released")}>
               + Allotment Released
             </Btn>
@@ -399,7 +477,7 @@ export function RaaoLedgerDocument() {
           <div style={{ flex: 1, textAlign: "center" }}>
             <div style={{ fontSize: 12, fontWeight: 700 }}>Registry of Appropriations, Allotments and Obligations</div>
             <div style={{ fontSize: 11, fontWeight: 700 }}>Personal Services</div>
-            <div style={{ fontSize: 11 }}>Municipality of San Pascual</div>
+            <div style={{ fontSize: 11 }}>{MUNICIPALITY.municipality}</div>
             <div style={{ fontSize: 10 }}>
               {doc.fund}
               {doc.fiscalYear ? ` — CY ${doc.fiscalYear}` : ""}
@@ -478,10 +556,10 @@ export function RaaoLedgerDocument() {
             </tr>
           </thead>
           <tbody>
-            {resolved.map(({ band, totals }, i) => (
-              <BandRow key={i} band={band} totals={totals} />
+            {resolved.map(({ band, totals, allotment }) => (
+              <BandRow key={band.id} band={band} totals={totals} allotment={allotment} />
             ))}
-            <FillerRows count={parseAmount(doc.pad)} cols={COLS} />
+            <FillerRows count={parseRowCount(doc.pad, 3)} cols={COLS} />
           </tbody>
         </table>
       </PaperSheet>

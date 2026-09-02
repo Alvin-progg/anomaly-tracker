@@ -1,34 +1,48 @@
 import type { RaaoRecord } from "@/app/lib/raao/records";
 import type { AnomalyAlert } from "@/app/lib/budget/dashboard";
-import type { AuditLogRow } from "@/app/lib/tracking/tracking";
 import type { FundClassification } from "@/app/lib/config/funds";
-import { formatAmount, formatPeso, percentOf } from "@/app/lib/budget/format";
+import { formatAmount, percentOf } from "@/app/lib/budget/format";
 
 /**
  * Pure aggregation over already-fetched, already-authorized data — no "server-only" here on
  * purpose, this runs client-side in reports-content.tsx over the arrays page.tsx fetched once,
  * same convention as every other filter/table module in this app (Archives, RAAO Records, the
  * audit log table).
+ *
+ * Everything built here is rendered inside a `.print-area`, so it follows the paper rules stated in
+ * app/components/ui/paper.tsx: bare grouped figures, no ₱ inside a cell, a plain hyphen for nil.
  */
 
-export type ReportType = "fund_status" | "department_saao" | "fund_utilization" | "department" | "anomaly" | "audit";
+export type ReportType = "fund_status" | "department_saao" | "fund_utilization" | "department" | "anomaly";
+
+export const ALL_FISCAL_YEARS = "All";
 
 export interface ReportFilters {
   type: ReportType;
-  /** "All" or a fund short code. Ignored by "anomaly"/"audit" — neither carries a fund. */
+  /** Fiscal year id, or ALL_FISCAL_YEARS. */
+  fiscalYearId: string;
+  /** "All" or a fund short code. Ignored by "anomaly" — alerts carry no fund. */
   fund: string;
   /** "" = unbounded. */
   from: string;
   to: string;
 }
 
-export const REPORT_TYPES: { value: ReportType; label: string; usesFund: boolean }[] = [
-  { value: "fund_status", label: "Fund Status Summary", usesFund: true },
-  { value: "department_saao", label: "Status of Appropriation, Allotment and Obligations (by Office)", usesFund: true },
-  { value: "fund_utilization", label: "Fund Utilization Summary", usesFund: true },
-  { value: "department", label: "Utilization by Department", usesFund: true },
-  { value: "anomaly", label: "AI Anomaly Alerts Summary", usesFund: false },
-  { value: "audit", label: "Audit Trail Report", usesFund: false },
+/**
+ * `usesFiscalYear` is false for alerts: `anomaly_alerts` has no `fiscal_year_id` column, so scoping
+ * them by year would silently drop every row rather than filter honestly.
+ */
+export const REPORT_TYPES: { value: ReportType; label: string; usesFund: boolean; usesFiscalYear: boolean }[] = [
+  { value: "fund_status", label: "Fund Status Summary", usesFund: true, usesFiscalYear: true },
+  {
+    value: "department_saao",
+    label: "Status of Appropriation, Allotment and Obligations (by Office)",
+    usesFund: true,
+    usesFiscalYear: true,
+  },
+  { value: "fund_utilization", label: "Fund Utilization Summary", usesFund: true, usesFiscalYear: true },
+  { value: "department", label: "Utilization by Department", usesFund: true, usesFiscalYear: true },
+  { value: "anomaly", label: "AI Anomaly Alerts Summary", usesFund: false, usesFiscalYear: false },
 ];
 
 export interface ReportColumn {
@@ -54,9 +68,13 @@ export interface GeneratedReport {
   type: ReportType;
   typeLabel: string;
   fundLabel: string;
+  /** Resolved label of the chosen year, or "All fiscal years". Printed in the sheet header. */
+  fiscalYearLabel: string;
   from: string;
   to: string;
   generatedAt: string;
+  /** True when any source table hit its row cap — the totals below are then incomplete. */
+  truncated: boolean;
   tables: ReportTable[];
 }
 
@@ -65,8 +83,8 @@ export interface ReportRawData {
   allotments: RaaoRecord[];
   obligations: RaaoRecord[];
   alerts: AnomalyAlert[];
-  auditLog: AuditLogRow[];
   fundClassifications: FundClassification[];
+  truncated: boolean;
 }
 
 function inRange(date: string, from: string, to: string): boolean {
@@ -75,25 +93,25 @@ function inRange(date: string, from: string, to: string): boolean {
   return true;
 }
 
-function moneyOrDash(n: number): string {
-  return n !== 0 ? formatPeso(n) : "—";
-}
-
 /**
- * For the SAAO report only. It reproduces a filed government sheet, and that sheet prints bare
- * grouped figures with a plain hyphen for nil — no ₱, no em dash. The management summaries keep
- * `moneyOrDash` and its peso sign.
+ * Every figure here lands on paper, so it follows the form's convention: grouped to 2 dp, no
+ * currency symbol, plain hyphen for nil. `formatPeso` is for on-screen app chrome only.
  */
 function paperOrDash(n: number): string {
   return n !== 0 ? formatAmount(n) : "-";
 }
 
 function pctOrDash(part: number, whole: number): string {
-  return percentOf(part, whole) ?? "—";
+  return percentOf(part, whole) ?? "-";
 }
 
 function filterRecords(rows: RaaoRecord[], filters: ReportFilters): RaaoRecord[] {
-  return rows.filter((r) => inRange(r.recordDate, filters.from, filters.to) && (filters.fund === "All" || r.fundShortCode === filters.fund));
+  return rows.filter(
+    (r) =>
+      inRange(r.recordDate, filters.from, filters.to) &&
+      (filters.fund === "All" || r.fundShortCode === filters.fund) &&
+      (filters.fiscalYearId === ALL_FISCAL_YEARS || r.fiscalYearId === filters.fiscalYearId)
+  );
 }
 
 interface FundTotals {
@@ -106,7 +124,7 @@ interface FundTotals {
 function groupByFund(appropriations: RaaoRecord[], allotments: RaaoRecord[], obligations: RaaoRecord[], filters: ReportFilters): FundTotals[] {
   const byFund = new Map<string, FundTotals>();
   const ensure = (r: RaaoRecord): FundTotals => {
-    const key = r.fundShortCode ?? "—";
+    const key = r.fundShortCode ?? "-";
     let entry = byFund.get(key);
     if (!entry) {
       entry = { fund: r.fundName ?? key, appropriated: 0, allotted: 0, obligated: 0 };
@@ -146,18 +164,18 @@ function buildFundStatusReport(appropriations: RaaoRecord[], allotments: RaaoRec
     ],
     rows: funds.map((f) => ({
       fund: f.fund,
-      appropriation: moneyOrDash(f.appropriated),
-      allotment: moneyOrDash(f.allotted),
-      obligation: moneyOrDash(f.obligated),
-      balance: moneyOrDash(f.allotted - f.obligated),
+      appropriation: paperOrDash(f.appropriated),
+      allotment: paperOrDash(f.allotted),
+      obligation: paperOrDash(f.obligated),
+      balance: paperOrDash(f.allotted - f.obligated),
       utilized: pctOrDash(f.obligated, f.allotted),
     })),
     totalsRow: {
       fund: "TOTAL",
-      appropriation: moneyOrDash(totals.appropriated),
-      allotment: moneyOrDash(totals.allotted),
-      obligation: moneyOrDash(totals.obligated),
-      balance: moneyOrDash(totals.allotted - totals.obligated),
+      appropriation: paperOrDash(totals.appropriated),
+      allotment: paperOrDash(totals.allotted),
+      obligation: paperOrDash(totals.obligated),
+      balance: paperOrDash(totals.allotted - totals.obligated),
       utilized: pctOrDash(totals.obligated, totals.allotted),
     },
   };
@@ -198,8 +216,8 @@ function buildDepartmentSaaoReports(
   const byDept = new Map<string, Map<string, Cell>>();
 
   const ensure = (record: RaaoRecord): Cell => {
-    const dept = record.departmentName ?? "—";
-    const fundKey = record.fundShortCode ?? "—";
+    const dept = record.departmentName ?? "-";
+    const fundKey = record.fundShortCode ?? "-";
     let funds = byDept.get(dept);
     if (!funds) {
       funds = new Map();
@@ -279,14 +297,14 @@ function buildFundUtilizationReport(appropriations: RaaoRecord[], allotments: Ra
     ],
     rows: funds.map((f) => ({
       fund: f.fund,
-      appropriated: moneyOrDash(f.appropriated),
-      utilized: moneyOrDash(f.obligated),
+      appropriated: paperOrDash(f.appropriated),
+      utilized: paperOrDash(f.obligated),
       percent: pctOrDash(f.obligated, f.appropriated),
     })),
     totalsRow: {
       fund: "TOTAL",
-      appropriated: moneyOrDash(totals.appropriated),
-      utilized: moneyOrDash(totals.obligated),
+      appropriated: paperOrDash(totals.appropriated),
+      utilized: paperOrDash(totals.obligated),
       percent: pctOrDash(totals.obligated, totals.appropriated),
     },
   };
@@ -301,7 +319,7 @@ interface DeptTotals {
 function buildDepartmentReport(appropriations: RaaoRecord[], obligations: RaaoRecord[], filters: ReportFilters): ReportTable {
   const byDept = new Map<string, DeptTotals>();
   const ensure = (r: RaaoRecord): DeptTotals => {
-    const key = r.departmentName ?? "—";
+    const key = r.departmentName ?? "-";
     let entry = byDept.get(key);
     if (!entry) {
       entry = { department: key, appropriated: 0, obligated: 0 };
@@ -329,16 +347,16 @@ function buildDepartmentReport(appropriations: RaaoRecord[], obligations: RaaoRe
     ],
     rows: depts.map((d) => ({
       department: d.department,
-      appropriated: moneyOrDash(d.appropriated),
-      obligated: moneyOrDash(d.obligated),
-      balance: moneyOrDash(d.appropriated - d.obligated),
+      appropriated: paperOrDash(d.appropriated),
+      obligated: paperOrDash(d.obligated),
+      balance: paperOrDash(d.appropriated - d.obligated),
       utilized: pctOrDash(d.obligated, d.appropriated),
     })),
     totalsRow: {
       department: "TOTAL",
-      appropriated: moneyOrDash(totals.appropriated),
-      obligated: moneyOrDash(totals.obligated),
-      balance: moneyOrDash(totals.appropriated - totals.obligated),
+      appropriated: paperOrDash(totals.appropriated),
+      obligated: paperOrDash(totals.obligated),
+      balance: paperOrDash(totals.appropriated - totals.obligated),
       utilized: pctOrDash(totals.obligated, totals.appropriated),
     },
   };
@@ -388,7 +406,7 @@ function buildAnomalySummary(alerts: AnomalyAlert[], filters: ReportFilters): Re
     rows: filtered.map((a) => ({
       ref: a.alertRef,
       type: a.alertType,
-      department: a.department ?? "—",
+      department: a.department ?? "-",
       severity: a.severity,
       status: a.status,
       confidence: `${a.confidence}%`,
@@ -399,33 +417,17 @@ function buildAnomalySummary(alerts: AnomalyAlert[], filters: ReportFilters): Re
   return [severityTable, statusTable, listTable];
 }
 
-function buildAuditTrail(entries: AuditLogRow[], filters: ReportFilters): ReportTable[] {
-  const filtered = entries.filter((e) => inRange(e.created_at.slice(0, 10), filters.from, filters.to));
-  return [
-    {
-      title: "Audit Trail",
-      columns: [
-        { key: "date", label: "Date", align: "left" },
-        { key: "user", label: "User", align: "left" },
-        { key: "role", label: "Role", align: "left" },
-        { key: "module", label: "Module", align: "left" },
-        { key: "action", label: "Action", align: "left" },
-        { key: "details", label: "Details", align: "left" },
-      ],
-      rows: filtered.map((e) => ({
-        date: e.created_at.slice(0, 16).replace("T", " "),
-        user: e.email,
-        role: e.role,
-        module: e.module,
-        action: e.action,
-        details: e.details ?? "—",
-      })),
-      totalsRow: { date: "", user: "", role: "", module: "", action: "TOTAL ENTRIES", details: String(filtered.length) },
-    },
-  ];
-}
-
-export function generateReport(raw: ReportRawData, filters: ReportFilters): GeneratedReport {
+/**
+ * There is no Audit Trail report. `audit_log` is admin-only by RLS
+ * (20260806090520_dashboard_tracking.sql) while this page is personnel-only, so the report could
+ * never return a row — it printed "No records match the selected filters." for every user and every
+ * date range. Admins read the log at /admin/audit.
+ */
+export function generateReport(
+  raw: ReportRawData,
+  filters: ReportFilters,
+  fiscalYearLabel: string
+): GeneratedReport {
   const typeMeta = REPORT_TYPES.find((t) => t.value === filters.type)!;
   const fundLabel =
     filters.fund === "All" ? "All Funds" : (raw.fundClassifications.find((f) => f.shortCode === filters.fund)?.name ?? filters.fund);
@@ -434,9 +436,11 @@ export function generateReport(raw: ReportRawData, filters: ReportFilters): Gene
     type: filters.type,
     typeLabel: typeMeta.label,
     fundLabel,
+    fiscalYearLabel,
     from: filters.from,
     to: filters.to,
     generatedAt: new Date().toISOString(),
+    truncated: raw.truncated,
   };
 
   switch (filters.type) {
@@ -450,7 +454,5 @@ export function generateReport(raw: ReportRawData, filters: ReportFilters): Gene
       return { ...base, tables: [buildDepartmentReport(raw.appropriations, raw.obligations, filters)] };
     case "anomaly":
       return { ...base, tables: buildAnomalySummary(raw.alerts, filters) };
-    case "audit":
-      return { ...base, tables: buildAuditTrail(raw.auditLog, filters) };
   }
 }

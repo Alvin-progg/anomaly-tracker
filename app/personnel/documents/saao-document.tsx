@@ -15,6 +15,7 @@ import {
   cellRight,
   longDate,
   parseAmount,
+  parseRowCount,
 } from "@/app/components/ui/paper";
 
 /**
@@ -311,8 +312,8 @@ function ItemEditor({
   );
 }
 
-export function SaaoDocument() {
-  const [doc, setDoc] = useState<SaaoDoc>(EMPTY_DOC);
+export function SaaoDocument({ defaultAsOf = "" }: { defaultAsOf?: string }) {
+  const [doc, setDoc] = useState<SaaoDoc>({ ...EMPTY_DOC, asOf: defaultAsOf });
   const set = <K extends keyof SaaoDoc>(key: K, value: SaaoDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
   const mooeLeaves = leavesIn(doc.mooe);
@@ -409,13 +410,13 @@ export function SaaoDocument() {
           </thead>
           <tbody>
             <SectionRows heading="Maintenance & Other Operating Expenses" items={doc.mooe} />
-            <FillerRows count={parseAmount(doc.mooePad)} cols={COLS} />
+            <FillerRows count={parseRowCount(doc.mooePad, 1)} cols={COLS} />
             <TotalRow label="TOTAL MOOE" leaves={mooeLeaves} />
 
             {hasCapitalOutlay && (
               <>
                 <SectionRows heading="Capital Outlay" items={doc.co} />
-                <FillerRows count={parseAmount(doc.coPad)} cols={COLS} />
+                <FillerRows count={parseRowCount(doc.coPad, 4)} cols={COLS} />
                 <TotalRow label="TOTAL CAPITAL OUTLAY" leaves={coLeaves} />
               </>
             )}

@@ -36,9 +36,12 @@ function statusLabel(status: RecordStatus): string {
 export function ArchivesContent({
   records,
   fundClassifications,
+  truncated = false,
 }: {
   records: ArchiveRecord[];
   fundClassifications: FundClassification[];
+  /** The server hit its per-table row cap, so a search here may be missing older records. */
+  truncated?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<(typeof TYPE_OPTIONS)[number]>("All");
@@ -65,6 +68,13 @@ export function ArchivesContent({
   return (
     <SectionCard>
       <SectionTitle>Archives & Record Search</SectionTitle>
+
+      {truncated && (
+        <p className="mt-3.5 text-[12px] text-[#B45309] bg-[#FFFBEB] border border-[#FDE68A] rounded-md px-3 py-2">
+          Showing the most recent records only — older entries exist beyond the load limit and will not
+          appear in this search.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2.5 mt-3.5 mb-3.5">
         <div className="relative flex-1 min-w-[220px]">

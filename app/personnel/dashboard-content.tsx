@@ -77,7 +77,7 @@ export async function PersonnelDashboardContent() {
 
       <div className="grid grid-cols-[1fr_340px] gap-4">
         <SectionCard>
-          <SectionTitle>Utilization by Department ({fiscalYear} Q1–Q3)</SectionTitle>
+          <SectionTitle>Utilization by Department ({fiscalYear})</SectionTitle>
           <UtilizationBarChart data={byDepartment} />
         </SectionCard>
 

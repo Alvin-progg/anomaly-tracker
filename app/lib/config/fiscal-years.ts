@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { authEnv } from "@/app/lib/auth/env";
 
 export interface FiscalYear {
@@ -21,7 +22,14 @@ function fromRow(row: FiscalYearRow): FiscalYear {
   return { id: row.id, label: row.label, startDate: row.start_date, endDate: row.end_date, status: row.status };
 }
 
-export async function getFiscalYears(): Promise<FiscalYear[]> {
+/**
+ * `cache: "no-store"` keeps an admin's activation from being served stale; the React `cache()`
+ * wrapper on top collapses the several reads a single request now makes — the shell's footer, a
+ * page's own scoping lookup, and any create action's `getActiveFiscalYearId()` — into one PostgREST
+ * round trip. Per-request memo only; it does not survive to the next request. Same reasoning as
+ * `getSecuritySettings` in ./security.ts.
+ */
+export const getFiscalYears = cache(async (): Promise<FiscalYear[]> => {
   try {
     const response = await fetch(`${authEnv.restUrl}/fiscal_years?select=*&order=start_date.desc`, {
       headers: { apikey: authEnv.anonKey },
@@ -33,7 +41,20 @@ export async function getFiscalYears(): Promise<FiscalYear[]> {
   } catch {
     return [];
   }
-}
+});
+
+/**
+ * The one entry point for "which year is the system on". Everything that scopes to, or displays, a
+ * fiscal year goes through here rather than deriving one from the wall clock — the two disagree the
+ * moment a year is left open past December, and a wrong year on a filed budget document is worse
+ * than a missing one.
+ *
+ * Returns null when no row is active, which `activateFiscalYear` below can briefly produce.
+ */
+export const getActiveFiscalYear = cache(async (): Promise<FiscalYear | null> => {
+  const years = await getFiscalYears();
+  return years.find((year) => year.status === "active") ?? null;
+});
 
 export async function createFiscalYear(
   accessToken: string,

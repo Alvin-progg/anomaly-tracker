@@ -134,14 +134,27 @@ export function AbcDocument() {
 
   const set = <K extends keyof AbcDoc>(key: K, value: AbcDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
+  // Derived from `prev`, not the render-scope `doc` — otherwise two updates against the same render
+  // lose the first.
   const setGroup = (g: number, patch: Partial<AbcGroup>) =>
-    set("groups", doc.groups.map((group, idx) => (idx === g ? { ...group, ...patch } : group)));
+    setDoc((prev) => ({ ...prev, groups: prev.groups.map((group, idx) => (idx === g ? { ...group, ...patch } : group)) }));
 
   const setItem = (g: number, i: number, key: keyof AbcItem, value: string) =>
-    setGroup(g, { items: doc.groups[g].items.map((item, idx) => (idx === i ? { ...item, [key]: value } : item)) });
+    setDoc((prev) => ({
+      ...prev,
+      groups: prev.groups.map((group, idx) =>
+        idx === g
+          ? { ...group, items: group.items.map((item, j) => (j === i ? { ...item, [key]: value } : item)) }
+          : group
+      ),
+    }));
 
   const grandTotal = doc.groups.reduce((sum, group) => sum + groupTotal(group), 0);
-  const bodyRowCount = doc.groups.reduce((sum, group) => sum + group.items.length + 2, 0);
+  // Group label + items + TOTAL per group, plus the one GRANDTOTAL row at the end.
+  const bodyRowCount = doc.groups.reduce((sum, group) => sum + group.items.length + 2, 0) + 1;
+
+  /** Item numbers run continuously down the sheet, not restarting inside each expense group. */
+  const firstIndexOf = (g: number) => doc.groups.slice(0, g).reduce((n, group) => n + group.items.length, 0);
 
   const signatories = [
     { label: "Prepared / Submitted by:", name: doc.preparedBy, position: doc.preparedByPosition },
@@ -346,8 +359,13 @@ export function AbcDocument() {
                   ))}
                 </tr>
                 {group.items.map((item, i) => (
-                  <ItemRow key={i} item={item} index={i + 1} />
+                  <ItemRow key={i} item={item} index={firstIndexOf(g) + i + 1} />
                 ))}
+                {/* Blank ruled rows belong inside the last group, above its TOTAL — that is where
+                    the pre-printed form leaves room, not after the totals. */}
+                {g === doc.groups.length - 1 && (
+                  <FillerRows count={Math.max(0, MIN_BODY_ROWS - bodyRowCount)} cols={COLS} />
+                )}
                 <tr style={{ fontWeight: 700 }}>
                   <td style={cell} />
                   <td style={cell}>TOTAL</td>
@@ -358,8 +376,6 @@ export function AbcDocument() {
                 </tr>
               </Fragment>
             ))}
-
-            <FillerRows count={Math.max(0, MIN_BODY_ROWS - bodyRowCount)} cols={COLS} />
 
             <tr style={{ fontWeight: 700, fontStyle: "italic" }}>
               <td style={cell} />

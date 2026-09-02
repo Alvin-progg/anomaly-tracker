@@ -38,11 +38,11 @@ export function FiscalYearSettings({ fiscalYears }: { fiscalYears: FiscalYear[] 
     });
   }
 
-  function handleActivate(id: string, label: string) {
+  function handleActivate(id: string) {
     setActivatingId(id);
     setActivateError(undefined);
     startActivateTransition(async () => {
-      const result = await activateFiscalYearAction(id, label);
+      const result = await activateFiscalYearAction(id);
       if (result.error) setActivateError(result.error);
       setActivatingId(null);
     });
@@ -78,7 +78,7 @@ export function FiscalYearSettings({ fiscalYears }: { fiscalYears: FiscalYear[] 
               </div>
               <div className="text-[11px] text-[#6B7A99]">{formatRange(fy.startDate, fy.endDate)}</div>
               {fy.status === "closed" && (
-                <Btn variant="ghost" small disabled={activatingId === fy.id} onClick={() => handleActivate(fy.id, fy.label)}>
+                <Btn variant="ghost" small disabled={activatingId === fy.id} onClick={() => handleActivate(fy.id)}>
                   {activatingId === fy.id ? "Activating…" : "Activate"}
                 </Btn>
               )}
