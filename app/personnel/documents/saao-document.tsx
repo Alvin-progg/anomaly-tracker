@@ -1,165 +1,313 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { SectionCard, SectionTitle } from "@/app/components/ui/section-card";
 import { Btn } from "@/app/components/ui/btn";
-import { formatPeso } from "@/app/lib/budget/format";
 import { FieldInput, FieldSelect } from "./field-input";
+import {
+  FillerRows,
+  PaperSheet,
+  amountOrBlank,
+  amountOrDash,
+  cell,
+  cellCenter,
+  cellHead,
+  cellRight,
+  longDate,
+  parseAmount,
+} from "@/app/components/ui/paper";
 
-interface SaaoRow {
-  activity: string;
+/**
+ * Status of Appropriation, Allotment and Obligations.
+ *
+ * Layout is taken from the scanned sheets in `sample/` — "SAAO- ELEMENTARY EDUCATION with data.png"
+ * (filled), plus the Secondary Education and General Administration blanks. Three things about that
+ * form that a summary table does not capture, and that this component exists to reproduce:
+ *
+ *  - The title is singular: STATUS OF APPROPRIATION, ALLOTMENT AND OBLIGATIONS.
+ *  - `Balance` is one header spanning two sub-columns, `Allotment` and `Appropriations`. They are
+ *    different subtractions (see `leafBalances`), not one number rendered twice.
+ *  - Entries are two levels deep. A numbered activity ("1 Demolition of School Building") carries
+ *    no figures of its own when it has facility rows beneath it ("-Pook ni Banal ES"); the money
+ *    sits on the leaves. An activity with no children carries its own figures ("2 Other Supplies -
+ *    ALS"). Totals therefore sum leaves, never both levels.
+ *
+ * The sheet has no Republic-of-the-Philippines letterhead and no signature block. It is a working
+ * schedule, not a certified document — do not add either back.
+ */
+
+interface SaaoLeaf {
+  label: string;
   appropriation: string;
   allotment: string;
   obligation: string;
 }
 
+interface SaaoItem extends SaaoLeaf {
+  children: SaaoLeaf[];
+}
+
 interface SaaoDoc {
   asOf: string;
   office: string;
-  fund: "current" | "continuing" | "supplemental";
-  mooeItems: SaaoRow[];
-  coItems: SaaoRow[];
+  appropriationType: "current" | "supplemental";
+  mooe: SaaoItem[];
+  mooePad: string;
+  co: SaaoItem[];
+  coPad: string;
 }
 
-const BLANK_ROW: SaaoRow = { activity: "", appropriation: "", allotment: "", obligation: "" };
+const BLANK_LEAF: SaaoLeaf = { label: "", appropriation: "", allotment: "", obligation: "" };
+const BLANK_ITEM: SaaoItem = { ...BLANK_LEAF, children: [] };
 
 const EMPTY_DOC: SaaoDoc = {
   asOf: "",
   office: "",
-  fund: "current",
-  mooeItems: [BLANK_ROW],
-  coItems: [BLANK_ROW],
+  appropriationType: "current",
+  mooe: [BLANK_ITEM],
+  mooePad: "1",
+  co: [],
+  coPad: "4",
 };
 
-const FUND_OPTIONS = [
+/** "Continuing Appropriations" is a different form entirely — see sef-document.tsx. */
+const TYPE_OPTIONS = [
   { value: "current", label: "Current Legislative Appropriation" },
-  { value: "continuing", label: "Continuing Appropriations" },
   { value: "supplemental", label: "Supplemental Budget" },
 ];
 
-const FUND_LABEL: Record<SaaoDoc["fund"], string> = {
+const TYPE_LABEL: Record<SaaoDoc["appropriationType"], string> = {
   current: "Current Legislative Appropriation",
-  continuing: "Continuing Appropriations",
   supplemental: "Supplemental Budget",
 };
 
-const cellStyle: React.CSSProperties = { border: "1px solid #1F3864", padding: "5px 8px" };
-const paperFont: React.CSSProperties = { fontFamily: '"Times New Roman", Times, serif', color: "#000" };
+const COLS = 6;
 
-function num(value: string): number {
-  const n = parseFloat(value.replace(/,/g, ""));
-  return isNaN(n) ? 0 : n;
+/** The rows that actually carry money: an item's children, or the item itself if it has none. */
+function leavesOf(item: SaaoItem): SaaoLeaf[] {
+  return item.children.length > 0 ? item.children : [item];
 }
 
-function money(value: number): string {
-  return value !== 0 ? formatPeso(value) : "—";
+function leavesIn(items: SaaoItem[]): SaaoLeaf[] {
+  return items.flatMap(leavesOf);
 }
 
-function sumOf(rows: SaaoRow[], key: keyof SaaoRow): number {
-  return rows.reduce((sum, row) => sum + num(row[key]), 0);
+interface Money {
+  appropriation: number;
+  allotment: number;
+  obligation: number;
 }
 
-function balanceAllotment(rows: SaaoRow[]): number {
-  return rows.reduce((sum, row) => sum + (num(row.allotment) - num(row.obligation)), 0);
+function sumLeaves(leaves: SaaoLeaf[]): Money {
+  return leaves.reduce(
+    (acc, leaf) => ({
+      appropriation: acc.appropriation + parseAmount(leaf.appropriation),
+      allotment: acc.allotment + parseAmount(leaf.allotment),
+      obligation: acc.obligation + parseAmount(leaf.obligation),
+    }),
+    { appropriation: 0, allotment: 0, obligation: 0 }
+  );
 }
 
-function RowEditor({
-  rows,
-  onChange,
-  title,
-}: {
-  rows: SaaoRow[];
-  onChange: (rows: SaaoRow[]) => void;
-  title: string;
-}) {
-  const setRow = (i: number, key: keyof SaaoRow, value: string) => {
-    const next = [...rows];
-    next[i] = { ...next[i], [key]: value };
-    onChange(next);
+/**
+ * The two Balance columns are different subtractions. On the Elementary sheet, San Antonio ES shows
+ * Allotment 2,600,000.00 − Obligation 2,596,555.99 = 3,444.01 under Balance/Allotment, and
+ * Appropriations 2,600,000.00 − Allotment 2,600,000.00 = 0, printed as "-", under
+ * Balance/Appropriations.
+ */
+function leafBalances(money: Money): { allotment: number; appropriation: number } {
+  return {
+    allotment: money.allotment - money.obligation,
+    appropriation: money.appropriation - money.allotment,
   };
-  const add = () => onChange([...rows, BLANK_ROW]);
-  const remove = (i: number) => onChange(rows.filter((_, idx) => idx !== i));
+}
+
+function MoneyCells({ money }: { money: Money }) {
+  const balance = leafBalances(money);
+  return (
+    <>
+      <td style={cellRight}>{amountOrBlank(money.appropriation)}</td>
+      <td style={cellRight}>{amountOrBlank(money.allotment)}</td>
+      <td style={cellRight}>{amountOrBlank(money.obligation)}</td>
+      <td style={cellRight}>{amountOrDash(balance.allotment)}</td>
+      <td style={cellRight}>{amountOrDash(balance.appropriation)}</td>
+    </>
+  );
+}
+
+function TotalRow({ label, leaves, heavy }: { label: string; leaves: SaaoLeaf[]; heavy?: boolean }) {
+  const money = sumLeaves(leaves);
+  const balance = leafBalances(money);
+  return (
+    <tr style={{ fontWeight: 700 }}>
+      <td style={{ ...cellCenter, fontSize: heavy ? 11 : 10 }}>{label}</td>
+      <td style={cellRight}>{amountOrDash(money.appropriation)}</td>
+      <td style={cellRight}>{amountOrDash(money.allotment)}</td>
+      <td style={cellRight}>{amountOrDash(money.obligation)}</td>
+      <td style={cellRight}>{amountOrDash(balance.allotment)}</td>
+      <td style={cellRight}>{amountOrDash(balance.appropriation)}</td>
+    </tr>
+  );
+}
+
+function SectionRows({ heading, items }: { heading: string; items: SaaoItem[] }) {
+  return (
+    <>
+      <tr>
+        <td style={{ ...cell, fontWeight: 700 }}>{heading}</td>
+        <td style={cell} />
+        <td style={cell} />
+        <td style={cell} />
+        <td style={cell} />
+        <td style={cell} />
+      </tr>
+      {items.map((item, i) => {
+        const hasChildren = item.children.length > 0;
+        return (
+          <Fragment key={i}>
+            <tr>
+              <td style={cell}>
+                <span style={{ display: "inline-block", width: 16 }}>{i + 1}</span>
+                {item.label}
+              </td>
+              {hasChildren ? (
+                <>
+                  <td style={cell} />
+                  <td style={cell} />
+                  <td style={cell} />
+                  <td style={cell} />
+                  <td style={cell} />
+                </>
+              ) : (
+                <MoneyCells
+                  money={{
+                    appropriation: parseAmount(item.appropriation),
+                    allotment: parseAmount(item.allotment),
+                    obligation: parseAmount(item.obligation),
+                  }}
+                />
+              )}
+            </tr>
+            {item.children.map((child, c) => (
+              <tr key={c}>
+                <td style={{ ...cell, paddingLeft: 30 }}>{child.label}</td>
+                <MoneyCells
+                  money={{
+                    appropriation: parseAmount(child.appropriation),
+                    allotment: parseAmount(child.allotment),
+                    obligation: parseAmount(child.obligation),
+                  }}
+                />
+              </tr>
+            ))}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function LeafFields({
+  leaf,
+  onChange,
+}: {
+  leaf: SaaoLeaf;
+  onChange: (key: keyof SaaoLeaf, value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <FieldInput label="Appropriations" value={leaf.appropriation} onChange={(v) => onChange("appropriation", v)} placeholder="0.00" />
+      <FieldInput label="Allotment" value={leaf.allotment} onChange={(v) => onChange("allotment", v)} placeholder="0.00" />
+      <FieldInput label="Obligation" value={leaf.obligation} onChange={(v) => onChange("obligation", v)} placeholder="0.00" />
+    </div>
+  );
+}
+
+function ItemEditor({
+  title,
+  items,
+  onChange,
+  pad,
+  onPadChange,
+  activityPlaceholder,
+  childPlaceholder,
+}: {
+  title: string;
+  items: SaaoItem[];
+  onChange: (items: SaaoItem[]) => void;
+  pad: string;
+  onPadChange: (value: string) => void;
+  activityPlaceholder: string;
+  childPlaceholder: string;
+}) {
+  const setItem = (i: number, patch: Partial<SaaoItem>) =>
+    onChange(items.map((item, idx) => (idx === i ? { ...item, ...patch } : item)));
+
+  const setChild = (i: number, c: number, key: keyof SaaoLeaf, value: string) =>
+    setItem(i, { children: items[i].children.map((child, idx) => (idx === c ? { ...child, [key]: value } : child)) });
 
   return (
     <SectionCard>
       <SectionTitle>{title}</SectionTitle>
       <div className="flex flex-col gap-3">
-        {rows.map((row, i) => (
+        {items.map((item, i) => (
           <div key={i} className="border border-[#D1D9E6] rounded-md p-3 flex flex-col gap-2">
             <div className="flex justify-between items-center">
-              <span className="text-xs font-semibold text-[#6B7A99]">Entry {i + 1}</span>
-              {rows.length > 1 && (
-                <Btn variant="ghost" small onClick={() => remove(i)}>
-                  Remove
-                </Btn>
-              )}
+              <span className="text-xs font-semibold text-[#6B7A99]">Activity {i + 1}</span>
+              <Btn variant="ghost" small onClick={() => onChange(items.filter((_, idx) => idx !== i))}>
+                Remove
+              </Btn>
             </div>
             <FieldInput
-              label="Program / Project / Activity"
-              value={row.activity}
-              onChange={(v) => setRow(i, "activity", v)}
-              placeholder="e.g. Demolition of School Building – Banaba ES"
+              label="Function / Program / Project Activity"
+              value={item.label}
+              onChange={(v) => setItem(i, { label: v })}
+              placeholder={activityPlaceholder}
             />
-            <div className="grid grid-cols-3 gap-2">
-              <FieldInput
-                label="Appropriation (₱)"
-                value={row.appropriation}
-                onChange={(v) => setRow(i, "appropriation", v)}
-                placeholder="0.00"
-              />
-              <FieldInput label="Allotment (₱)" value={row.allotment} onChange={(v) => setRow(i, "allotment", v)} placeholder="0.00" />
-              <FieldInput
-                label="Obligation (₱)"
-                value={row.obligation}
-                onChange={(v) => setRow(i, "obligation", v)}
-                placeholder="0.00"
-              />
-            </div>
+
+            {item.children.length === 0 && <LeafFields leaf={item} onChange={(key, value) => setItem(i, { [key]: value })} />}
+
+            {item.children.map((child, c) => (
+              <div key={c} className="border-l-2 border-[#D1D9E6] pl-3 flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-semibold text-[#9BA8BE]">Sub-item {c + 1}</span>
+                  <Btn
+                    variant="ghost"
+                    small
+                    onClick={() => setItem(i, { children: item.children.filter((_, idx) => idx !== c) })}
+                  >
+                    Remove
+                  </Btn>
+                </div>
+                <FieldInput
+                  value={child.label}
+                  onChange={(v) => setChild(i, c, "label", v)}
+                  placeholder={childPlaceholder}
+                />
+                <LeafFields leaf={child} onChange={(key, value) => setChild(i, c, key, value)} />
+              </div>
+            ))}
+
+            <Btn variant="ghost" small onClick={() => setItem(i, { children: [...item.children, BLANK_LEAF] })}>
+              + Add Sub-item
+            </Btn>
+            {item.children.length === 0 && (
+              <p className="text-[11px] text-[#9BA8BE]">
+                Add sub-items to list facilities beneath this activity; its own amounts are then left blank, as on the form.
+              </p>
+            )}
           </div>
         ))}
       </div>
-      <Btn variant="ghost" small onClick={add} className="mt-3">
-        + Add Row
-      </Btn>
+      <div className="mt-3 flex items-end gap-3">
+        <Btn variant="ghost" small onClick={() => onChange([...items, BLANK_ITEM])}>
+          + Add Activity
+        </Btn>
+        <div className="w-28">
+          <FieldInput label="Blank rows" value={pad} onChange={onPadChange} placeholder="1" />
+        </div>
+      </div>
     </SectionCard>
-  );
-}
-
-function sectionRows(rows: SaaoRow[], label: string) {
-  const totalApp = sumOf(rows, "appropriation");
-  const totalAll = sumOf(rows, "allotment");
-  const totalObl = sumOf(rows, "obligation");
-  const totalBal = balanceAllotment(rows);
-
-  return (
-    <>
-      <tr>
-        <td colSpan={6} style={{ ...cellStyle, fontWeight: 700, background: "#E8ECF1", paddingLeft: 8 }}>
-          {label}
-        </td>
-      </tr>
-      {rows.map((row, i) => {
-        const bal = num(row.allotment) - num(row.obligation);
-        return (
-          <tr key={i}>
-            <td style={{ ...cellStyle, paddingLeft: 16 }}>{row.activity || " "}</td>
-            <td style={{ ...cellStyle, textAlign: "right" }}>{money(num(row.appropriation))}</td>
-            <td style={{ ...cellStyle, textAlign: "right" }}>{money(num(row.allotment))}</td>
-            <td style={{ ...cellStyle, textAlign: "right" }}>{money(num(row.obligation))}</td>
-            <td style={{ ...cellStyle, textAlign: "right" }}>{money(bal)}</td>
-            <td style={{ ...cellStyle, textAlign: "right" }}>—</td>
-          </tr>
-        );
-      })}
-      <tr style={{ fontWeight: 700, background: "#F0F2F5" }}>
-        <td style={{ ...cellStyle, paddingLeft: 8 }}>TOTAL {label.toUpperCase()}</td>
-        <td style={{ ...cellStyle, textAlign: "right" }}>{money(totalApp)}</td>
-        <td style={{ ...cellStyle, textAlign: "right" }}>{money(totalAll)}</td>
-        <td style={{ ...cellStyle, textAlign: "right" }}>{money(totalObl)}</td>
-        <td style={{ ...cellStyle, textAlign: "right" }}>{money(totalBal)}</td>
-        <td style={{ ...cellStyle, textAlign: "right" }}>—</td>
-      </tr>
-    </>
   );
 }
 
@@ -167,11 +315,16 @@ export function SaaoDocument() {
   const [doc, setDoc] = useState<SaaoDoc>(EMPTY_DOC);
   const set = <K extends keyof SaaoDoc>(key: K, value: SaaoDoc[K]) => setDoc((prev) => ({ ...prev, [key]: value }));
 
-  const allRows = [...doc.mooeItems, ...doc.coItems];
-  const grandApp = sumOf(allRows, "appropriation");
-  const grandAll = sumOf(allRows, "allotment");
-  const grandObl = sumOf(allRows, "obligation");
-  const grandBal = balanceAllotment(allRows);
+  const mooeLeaves = leavesIn(doc.mooe);
+  const coLeaves = leavesIn(doc.co);
+  const hasCapitalOutlay = doc.co.length > 0;
+
+  /**
+   * The Elementary and Secondary sheets close with "Subtotal" because each is one office in a
+   * multi-office set. General Administration, which has no Capital Outlay section, closes with
+   * "GRANDTOTAL" instead.
+   */
+  const closingLabel = hasCapitalOutlay ? "Subtotal" : "GRANDTOTAL";
 
   return (
     <div className="grid md:grid-cols-[420px_1fr] gap-5 items-start">
@@ -182,92 +335,95 @@ export function SaaoDocument() {
             <FieldInput label="As of Date" type="date" value={doc.asOf} onChange={(v) => set("asOf", v)} />
             <FieldSelect
               label="Appropriation Type"
-              value={doc.fund}
-              onChange={(v) => set("fund", v as SaaoDoc["fund"])}
-              options={FUND_OPTIONS}
+              value={doc.appropriationType}
+              onChange={(v) => set("appropriationType", v as SaaoDoc["appropriationType"])}
+              options={TYPE_OPTIONS}
             />
             <FieldInput
               label="Office / Department"
               value={doc.office}
               onChange={(v) => set("office", v)}
-              placeholder="e.g. Elementary Education, General Administration"
+              placeholder="e.g. Elementary Education"
             />
           </div>
         </SectionCard>
 
-        <RowEditor
-          rows={doc.mooeItems}
-          onChange={(rows) => set("mooeItems", rows)}
-          title="Maintenance & Other Operating Expenses (MOOE)"
+        <ItemEditor
+          title="Maintenance & Other Operating Expenses"
+          items={doc.mooe}
+          onChange={(items) => set("mooe", items)}
+          pad={doc.mooePad}
+          onPadChange={(v) => set("mooePad", v)}
+          activityPlaceholder="e.g. Demolition of School Building"
+          childPlaceholder="e.g. -Pook ni Banal ES"
         />
-        <RowEditor rows={doc.coItems} onChange={(rows) => set("coItems", rows)} title="Capital Outlay (CO)" />
+
+        <ItemEditor
+          title="Capital Outlay"
+          items={doc.co}
+          onChange={(items) => set("co", items)}
+          pad={doc.coPad}
+          onPadChange={(v) => set("coPad", v)}
+          activityPlaceholder="e.g. Improvement of School Facilities"
+          childPlaceholder="e.g. -San Antonio ES"
+        />
 
         <Btn onClick={() => window.print()}>Print / Save as PDF</Btn>
       </div>
 
-      <div>
-        <div className="no-print text-[13px] font-bold text-[#1F3864] uppercase tracking-wider mb-3.5">Live Preview</div>
-        <div className="print-area bg-white border border-[#D1D9E6] rounded-lg overflow-hidden">
-          <div style={{ ...paperFont, padding: "28px 32px", fontSize: 10, background: "#FFF" }}>
-            <div style={{ textAlign: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>Republic of the Philippines</div>
-              <div>Province of Batangas · Municipality of San Pascual</div>
-              <div>Municipal Budget Office</div>
-              <div style={{ marginTop: 10, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Status of Appropriations, Allotments and Obligations
-              </div>
-              <div style={{ fontSize: 10, marginTop: 2 }}>({FUND_LABEL[doc.fund]})</div>
-              <div style={{ marginTop: 4 }}>As of {doc.asOf || "___________"}</div>
-            </div>
-
-            <div style={{ marginBottom: 10, fontSize: 11 }}>
-              <strong>Office/Department:</strong> {doc.office || "___________"}
-            </div>
-
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#1F3864", color: "#FFF" }}>
-                  <th style={{ ...cellStyle, textAlign: "left", width: "34%" }}>Function / Program / Project / Activity</th>
-                  <th style={{ ...cellStyle, textAlign: "right", width: "13%" }}>Appropriations</th>
-                  <th style={{ ...cellStyle, textAlign: "right", width: "13%" }}>Allotment</th>
-                  <th style={{ ...cellStyle, textAlign: "right", width: "13%" }}>Obligation</th>
-                  <th style={{ ...cellStyle, textAlign: "right", width: "13%" }}>Balance – Allotment</th>
-                  <th style={{ ...cellStyle, textAlign: "right", width: "14%" }}>Balance – Appropriation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sectionRows(doc.mooeItems, "Maintenance & Other Operating Expenses")}
-                {sectionRows(doc.coItems, "Capital Outlay")}
-                <tr style={{ fontWeight: 700, background: "#1F3864", color: "#FFF" }}>
-                  <td style={cellStyle}>SUBTOTAL</td>
-                  <td style={{ ...cellStyle, textAlign: "right" }}>{money(grandApp)}</td>
-                  <td style={{ ...cellStyle, textAlign: "right" }}>{money(grandAll)}</td>
-                  <td style={{ ...cellStyle, textAlign: "right" }}>{money(grandObl)}</td>
-                  <td style={{ ...cellStyle, textAlign: "right" }}>{money(grandBal)}</td>
-                  <td style={{ ...cellStyle, textAlign: "right" }}>—</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, fontSize: 10 }}>
-              <div>
-                <div style={{ marginBottom: 28 }}>Prepared by:</div>
-                <div style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
-                  <div style={{ fontWeight: 700 }}>________________________________</div>
-                  <div>Budget Personnel</div>
-                </div>
-              </div>
-              <div>
-                <div style={{ marginBottom: 28 }}>Certified Correct:</div>
-                <div style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
-                  <div style={{ fontWeight: 700 }}>Merlita M. Yuncion</div>
-                  <div>Municipal Budget Officer</div>
-                </div>
-              </div>
-            </div>
-          </div>
+      <PaperSheet>
+        <div style={{ textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>STATUS OF APPROPRIATION, ALLOTMENT AND OBLIGATIONS</div>
+          <div style={{ fontSize: 11 }}>({TYPE_LABEL[doc.appropriationType]})</div>
+          <div style={{ fontSize: 11 }}>As of {longDate(doc.asOf)}</div>
         </div>
-      </div>
+
+        <div style={{ marginBottom: 8, fontSize: 11, paddingLeft: 24 }}>
+          Office/Department&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+          <strong>{doc.office ? doc.office.toUpperCase() : "________________"}</strong>
+        </div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+          <thead>
+            <tr>
+              <th style={{ ...cellHead, width: "34%" }} rowSpan={2}>
+                Function/Program/Project Activity
+              </th>
+              <th style={{ ...cellHead, width: "13%" }} rowSpan={2}>
+                APPROPRIATIONS
+              </th>
+              <th style={{ ...cellHead, width: "13%" }} rowSpan={2}>
+                ALLOTMENT
+              </th>
+              <th style={{ ...cellHead, width: "13%" }} rowSpan={2}>
+                OBLIGATION
+              </th>
+              <th style={cellHead} colSpan={2}>
+                Balance
+              </th>
+            </tr>
+            <tr>
+              <th style={{ ...cellHead, width: "13%" }}>Allotment</th>
+              <th style={{ ...cellHead, width: "14%" }}>Appropriations</th>
+            </tr>
+          </thead>
+          <tbody>
+            <SectionRows heading="Maintenance & Other Operating Expenses" items={doc.mooe} />
+            <FillerRows count={parseAmount(doc.mooePad)} cols={COLS} />
+            <TotalRow label="TOTAL MOOE" leaves={mooeLeaves} />
+
+            {hasCapitalOutlay && (
+              <>
+                <SectionRows heading="Capital Outlay" items={doc.co} />
+                <FillerRows count={parseAmount(doc.coPad)} cols={COLS} />
+                <TotalRow label="TOTAL CAPITAL OUTLAY" leaves={coLeaves} />
+              </>
+            )}
+
+            <TotalRow label={closingLabel} leaves={[...mooeLeaves, ...coLeaves]} heavy />
+          </tbody>
+        </table>
+      </PaperSheet>
     </div>
   );
 }

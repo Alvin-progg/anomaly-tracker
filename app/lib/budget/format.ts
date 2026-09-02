@@ -12,7 +12,16 @@ export function formatPesoCompact(amount: number): string {
 
 /** Ledger form: ₱22,450,000.00 — for anything that has to reconcile against a record. */
 export function formatPeso(amount: number): string {
-  return `₱${amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `₱${formatAmount(amount)}`;
+}
+
+/**
+ * Paper form: 22,450,000.00, no currency symbol. The government forms never print ₱ inside a
+ * table cell — see the scans behind app/components/ui/paper.tsx — so anything rendered onto one
+ * uses this and not formatPeso.
+ */
+export function formatAmount(amount: number): string {
+  return amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** Axis form: one decimal, no currency noise repeated down the axis. */

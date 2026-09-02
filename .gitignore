@@ -24,6 +24,10 @@ front-end-ref
 # database dumps written by the Backup & Recovery module
 /backups
 
+# scans of the real (signed) municipal forms — reference material for the print
+# layouts under app/personnel/documents/, not a build input
+/sample
+
 # misc
 .DS_Store
 *.pem

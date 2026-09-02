@@ -4,13 +4,16 @@ import { useState } from "react";
 import { OrsDocument } from "./ors-document";
 import { AbcDocument } from "./abc-document";
 import { SaaoDocument } from "./saao-document";
+import { SefDocument } from "./sef-document";
 import { RaaoLedgerDocument } from "./raao-ledger-document";
 
+/** Tab labels are the forms' own printed titles — see the scans in `sample/`. */
 const TABS = [
-  { key: "ors", label: "Obligation Request (ORS)" },
-  { key: "abc", label: "Approved Budget for Contract (ABC)" },
-  { key: "saao", label: "Status of Appropriations (SAAO)" },
-  { key: "raao", label: "RAAO Ledger Entry" },
+  { key: "ors", label: "Obligation Request" },
+  { key: "abc", label: "Approved Budget for the Contract" },
+  { key: "saao", label: "Status of Appropriation, Allotment and Obligations" },
+  { key: "sef", label: "Special Education Fund" },
+  { key: "raao", label: "RAAO — Personal Services" },
 ] as const;
 
 type DocType = (typeof TABS)[number]["key"];
@@ -20,7 +23,7 @@ export function DocumentsContent() {
 
   return (
     <div className="flex flex-col gap-3.5">
-      <div className="no-print flex gap-5 border-b border-[#D1D9E6]">
+      <div className="no-print flex flex-wrap gap-5 border-b border-[#D1D9E6]">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -38,6 +41,7 @@ export function DocumentsContent() {
       {docType === "ors" && <OrsDocument />}
       {docType === "abc" && <AbcDocument />}
       {docType === "saao" && <SaaoDocument />}
+      {docType === "sef" && <SefDocument />}
       {docType === "raao" && <RaaoLedgerDocument />}
     </div>
   );

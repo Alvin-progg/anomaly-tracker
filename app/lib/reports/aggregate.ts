@@ -2,7 +2,7 @@ import type { RaaoRecord } from "@/app/lib/raao/records";
 import type { AnomalyAlert } from "@/app/lib/budget/dashboard";
 import type { AuditLogRow } from "@/app/lib/tracking/tracking";
 import type { FundClassification } from "@/app/lib/config/funds";
-import { formatPeso, percentOf } from "@/app/lib/budget/format";
+import { formatAmount, formatPeso, percentOf } from "@/app/lib/budget/format";
 
 /**
  * Pure aggregation over already-fetched, already-authorized data — no "server-only" here on
@@ -11,7 +11,7 @@ import { formatPeso, percentOf } from "@/app/lib/budget/format";
  * audit log table).
  */
 
-export type ReportType = "saao" | "fund_utilization" | "department" | "anomaly" | "audit";
+export type ReportType = "fund_status" | "department_saao" | "fund_utilization" | "department" | "anomaly" | "audit";
 
 export interface ReportFilters {
   type: ReportType;
@@ -23,7 +23,8 @@ export interface ReportFilters {
 }
 
 export const REPORT_TYPES: { value: ReportType; label: string; usesFund: boolean }[] = [
-  { value: "saao", label: "SAAO Report (Status of Appropriations, Allotments & Obligations)", usesFund: true },
+  { value: "fund_status", label: "Fund Status Summary", usesFund: true },
+  { value: "department_saao", label: "Status of Appropriation, Allotment and Obligations (by Office)", usesFund: true },
   { value: "fund_utilization", label: "Fund Utilization Summary", usesFund: true },
   { value: "department", label: "Utilization by Department", usesFund: true },
   { value: "anomaly", label: "AI Anomaly Alerts Summary", usesFund: false },
@@ -34,6 +35,12 @@ export interface ReportColumn {
   key: string;
   label: string;
   align?: "left" | "right";
+  /**
+   * Optional spanning header. Consecutive columns sharing a `group` print under one merged cell in
+   * a second header row — the SAAO sheet's `Balance` over `Allotment` / `Appropriations`. Columns
+   * without one get a header cell spanning both rows.
+   */
+  group?: string;
 }
 
 export interface ReportTable {
@@ -70,6 +77,15 @@ function inRange(date: string, from: string, to: string): boolean {
 
 function moneyOrDash(n: number): string {
   return n !== 0 ? formatPeso(n) : "—";
+}
+
+/**
+ * For the SAAO report only. It reproduces a filed government sheet, and that sheet prints bare
+ * grouped figures with a plain hyphen for nil — no ₱, no em dash. The management summaries keep
+ * `moneyOrDash` and its peso sign.
+ */
+function paperOrDash(n: number): string {
+  return n !== 0 ? formatAmount(n) : "-";
 }
 
 function pctOrDash(part: number, whole: number): string {
@@ -115,11 +131,11 @@ function sumFundTotals(funds: FundTotals[]) {
   );
 }
 
-function buildSaaoReport(appropriations: RaaoRecord[], allotments: RaaoRecord[], obligations: RaaoRecord[], filters: ReportFilters): ReportTable {
+function buildFundStatusReport(appropriations: RaaoRecord[], allotments: RaaoRecord[], obligations: RaaoRecord[], filters: ReportFilters): ReportTable {
   const funds = groupByFund(appropriations, allotments, obligations, filters);
   const totals = sumFundTotals(funds);
   return {
-    title: "Status of Appropriations, Allotments and Obligations",
+    title: "Fund Status Summary",
     columns: [
       { key: "fund", label: "Fund", align: "left" },
       { key: "appropriation", label: "Appropriation", align: "right" },
@@ -145,6 +161,109 @@ function buildSaaoReport(appropriations: RaaoRecord[], allotments: RaaoRecord[],
       utilized: pctOrDash(totals.obligated, totals.allotted),
     },
   };
+}
+
+/**
+ * The SAAO sheet as the Budget Office files it — one table per office, and `Balance` split into
+ * its two distinct subtractions (see `sample/SAAO- ELEMENTARY EDUCATION with data.png`).
+ *
+ * Two things it deliberately does not do, both because the ledger cannot support them:
+ *
+ *  - **No MOOE / Capital Outlay sections.** The printed sheet groups activities by expense class,
+ *    but `appropriations`/`allotments`/`obligations` carry no expense-class column — "MOOE" and
+ *    "PS" appear only as free text inside `description`, and only on some rows. Inventing the
+ *    grouping by parsing that text would mis-bucket every row that does not follow the convention.
+ *    Use Document Creation for a sheet that needs the sections; they are typed there.
+ *  - **Rows are per fund, not per activity.** The three ledgers word the same programme
+ *    differently ("MOOE – Municipal Health Office" is released as "Q1–Q3 Release – Municipal
+ *    Health" and obligated as "Medicines & Medical Supplies – MHO"), and no column links a
+ *    release back to what it released. Department plus fund is the only key on which the three
+ *    reconcile, so that is the row. The activity cell lists the appropriation descriptions behind
+ *    each row so the programme is still named.
+ */
+function buildDepartmentSaaoReports(
+  appropriations: RaaoRecord[],
+  allotments: RaaoRecord[],
+  obligations: RaaoRecord[],
+  filters: ReportFilters
+): ReportTable[] {
+  interface Cell {
+    fund: string;
+    descriptions: string[];
+    appropriated: number;
+    allotted: number;
+    obligated: number;
+  }
+
+  const byDept = new Map<string, Map<string, Cell>>();
+
+  const ensure = (record: RaaoRecord): Cell => {
+    const dept = record.departmentName ?? "—";
+    const fundKey = record.fundShortCode ?? "—";
+    let funds = byDept.get(dept);
+    if (!funds) {
+      funds = new Map();
+      byDept.set(dept, funds);
+    }
+    let entry = funds.get(fundKey);
+    if (!entry) {
+      entry = { fund: record.fundName ?? fundKey, descriptions: [], appropriated: 0, allotted: 0, obligated: 0 };
+      funds.set(fundKey, entry);
+    }
+    return entry;
+  };
+
+  for (const record of filterRecords(appropriations, filters)) {
+    const entry = ensure(record);
+    entry.appropriated += record.amount;
+    if (!entry.descriptions.includes(record.description)) entry.descriptions.push(record.description);
+  }
+  for (const record of filterRecords(allotments, filters)) ensure(record).allotted += record.amount;
+  for (const record of filterRecords(obligations, filters)) ensure(record).obligated += record.amount;
+
+  const columns: ReportColumn[] = [
+    { key: "activity", label: "Function/Program/Project Activity", align: "left" },
+    { key: "appropriations", label: "APPROPRIATIONS", align: "right" },
+    { key: "allotment", label: "ALLOTMENT", align: "right" },
+    { key: "obligation", label: "OBLIGATION", align: "right" },
+    { key: "balanceAllotment", label: "Allotment", align: "right", group: "Balance" },
+    { key: "balanceAppropriations", label: "Appropriations", align: "right", group: "Balance" },
+  ];
+
+  return Array.from(byDept.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([department, funds]) => {
+      const cells = Array.from(funds.values()).sort((a, b) => a.fund.localeCompare(b.fund));
+      const totals = cells.reduce(
+        (acc, c) => ({
+          appropriated: acc.appropriated + c.appropriated,
+          allotted: acc.allotted + c.allotted,
+          obligated: acc.obligated + c.obligated,
+        }),
+        { appropriated: 0, allotted: 0, obligated: 0 }
+      );
+
+      return {
+        title: `Office/Department : ${department.toUpperCase()}`,
+        columns,
+        rows: cells.map((c) => ({
+          activity: c.descriptions.length > 0 ? `${c.fund} — ${c.descriptions.join("; ")}` : c.fund,
+          appropriations: paperOrDash(c.appropriated),
+          allotment: paperOrDash(c.allotted),
+          obligation: paperOrDash(c.obligated),
+          balanceAllotment: paperOrDash(c.allotted - c.obligated),
+          balanceAppropriations: paperOrDash(c.appropriated - c.allotted),
+        })),
+        totalsRow: {
+          activity: "GRANDTOTAL",
+          appropriations: paperOrDash(totals.appropriated),
+          allotment: paperOrDash(totals.allotted),
+          obligation: paperOrDash(totals.obligated),
+          balanceAllotment: paperOrDash(totals.allotted - totals.obligated),
+          balanceAppropriations: paperOrDash(totals.appropriated - totals.allotted),
+        },
+      };
+    });
 }
 
 function buildFundUtilizationReport(appropriations: RaaoRecord[], allotments: RaaoRecord[], obligations: RaaoRecord[], filters: ReportFilters): ReportTable {
@@ -321,8 +440,10 @@ export function generateReport(raw: ReportRawData, filters: ReportFilters): Gene
   };
 
   switch (filters.type) {
-    case "saao":
-      return { ...base, tables: [buildSaaoReport(raw.appropriations, raw.allotments, raw.obligations, filters)] };
+    case "fund_status":
+      return { ...base, tables: [buildFundStatusReport(raw.appropriations, raw.allotments, raw.obligations, filters)] };
+    case "department_saao":
+      return { ...base, tables: buildDepartmentSaaoReports(raw.appropriations, raw.allotments, raw.obligations, filters) };
     case "fund_utilization":
       return { ...base, tables: [buildFundUtilizationReport(raw.appropriations, raw.allotments, raw.obligations, filters)] };
     case "department":

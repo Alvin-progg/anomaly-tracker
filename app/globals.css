@@ -30,8 +30,10 @@ body {
   background-size: 32px 32px;
 }
 
-/* Printable-document isolation (Document Creation: ORS/ABC) — hide everything except the one
-   .print-area node so Print/Save-as-PDF produces just the government form, not the app chrome. */
+/* Printable-document isolation (Document Creation, Report Generation) — hide everything except
+   the one .print-area node so Print/Save-as-PDF produces just the government form, not the app
+   chrome. Hiding is `visibility`, not `display`, because the .print-area's ancestors have to stay
+   in the box tree for it to be positioned at all. */
 @media print {
   body * {
     visibility: hidden;
@@ -40,16 +42,46 @@ body {
   .print-area * {
     visibility: visible;
   }
+
+  /* AppShell scrolls its own body and every paper wrapper is `overflow-hidden`; either one clips
+     an absolutely-positioned print-area to a single page, which is what truncated the multi-page
+     RAAO registry. Unwind the whole ancestor chain rather than guessing which link clipped. */
+  html,
+  body,
+  body * {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
   .print-area {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
+    border: 0 !important;
+    border-radius: 0 !important;
+    /* The RAAO registry's red/blue/green total bands are load-bearing — the budget office reads
+       the page by colour — so they must survive the printer's default de-inking. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
+
   .no-print {
     display: none !important;
   }
+
   @page {
     margin: 0.5in;
+  }
+
+  /* The RAAO registry and the ABC are landscape on paper (see sample/RAAO.png and
+     sample/"Approved Budget For the contract.png") and clip at the right edge on a portrait
+     sheet. Named page, opted into per form via `.print-area.landscape`. */
+  @page raao-landscape {
+    size: landscape;
+    margin: 0.4in;
+  }
+  .print-area.landscape {
+    page: raao-landscape;
   }
 }
