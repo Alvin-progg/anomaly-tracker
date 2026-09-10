@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { verifySession } from "@/app/lib/auth/dal";
 import { getAccessToken } from "@/app/lib/auth/session";
 import { recordAuditEvent } from "@/app/lib/tracking/tracking";
@@ -42,5 +42,6 @@ export async function updateModulePermissionAction(module: string, enabled: bool
   });
 
   revalidatePath("/admin/roles");
+  updateTag("module-permissions");
   return {};
 }

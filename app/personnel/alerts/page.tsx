@@ -7,12 +7,14 @@ import { listAlerts } from "@/app/lib/alerts/alerts";
 import { AlertsContent } from "./alerts-content";
 
 export default async function PersonnelAlertsPage() {
-  const session = await verifySession();
+  const [session, enabled] = await Promise.all([
+    verifySession(),
+    isModuleEnabledForPersonnel("ai_alerts"),
+  ]);
   if (session.role !== "personnel") {
     redirect("/admin");
   }
 
-  const enabled = await isModuleEnabledForPersonnel("ai_alerts");
   const accessToken = await getAccessToken();
   const alerts = enabled && accessToken ? await listAlerts(accessToken) : [];
 
