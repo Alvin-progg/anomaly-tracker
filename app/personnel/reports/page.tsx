@@ -27,10 +27,13 @@ export default async function PersonnelReportsPage() {
     redirect("/admin");
   }
 
-  const enabled = await isModuleEnabledForPersonnel("reports");
   const accessToken = await getAccessToken();
 
-  const [fiscalYears, activeYear] = await Promise.all([getFiscalYears(), getActiveFiscalYear()]);
+  const [enabled, fiscalYears, activeYear] = await Promise.all([
+    isModuleEnabledForPersonnel("reports"),
+    getFiscalYears(),
+    getActiveFiscalYear(),
+  ]);
 
   const data =
     enabled && accessToken

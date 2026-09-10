@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { authEnv } from "@/app/lib/auth/env";
 
 export interface FundClassification {
@@ -19,19 +20,28 @@ function fromRow(row: FundClassificationRow): FundClassification {
   return { id: row.id, name: row.name, shortCode: row.short_code, active: row.active };
 }
 
-export async function getFundClassifications(): Promise<FundClassification[]> {
-  try {
-    const response = await fetch(`${authEnv.restUrl}/fund_classifications?select=*&order=name.asc`, {
-      headers: { apikey: authEnv.anonKey },
-      cache: "no-store",
-    });
-    if (!response.ok) return [];
-    const rows = (await response.json()) as FundClassificationRow[];
-    return rows.map(fromRow);
-  } catch {
-    return [];
-  }
-}
+/**
+ * Global, anon-key-only config data (no bearer token, not RLS-scoped per user), so it's safe
+ * behind `unstable_cache` — invalidated by `updateTag("fund-classifications")` from the
+ * create/update/toggle-active actions in app/admin/config/actions.ts.
+ */
+export const getFundClassifications = unstable_cache(
+  async (): Promise<FundClassification[]> => {
+    try {
+      const response = await fetch(`${authEnv.restUrl}/fund_classifications?select=*&order=name.asc`, {
+        headers: { apikey: authEnv.anonKey },
+        cache: "no-store",
+      });
+      if (!response.ok) return [];
+      const rows = (await response.json()) as FundClassificationRow[];
+      return rows.map(fromRow);
+    } catch {
+      return [];
+    }
+  },
+  ["fund-classifications"],
+  { tags: ["fund-classifications"] }
+);
 
 export async function createFundClassification(
   accessToken: string,

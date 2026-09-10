@@ -1,4 +1,6 @@
 import "server-only";
+import { cache } from "react";
+import { unstable_cache } from "next/cache";
 import { authEnv } from "@/app/lib/auth/env";
 import { PERSONNEL_MODULES, isPersonnelModule, type PersonnelModule } from "./modules";
 
@@ -8,27 +10,40 @@ import { PERSONNEL_MODULES, isPersonnelModule, type PersonnelModule } from "./mo
  * module — a missing row must never silently lock personnel out. This is the one place in
  * the app where "fail safe" means "fail enabled"; everywhere else (RLS, admin checks) fails
  * closed.
+ *
+ * Global, anon-key-only config data (no bearer token, not RLS-scoped per user), so it's safe
+ * behind `unstable_cache` — invalidated by `updateTag("module-permissions")` from
+ * `updateModulePermissionAction` (Next 16 dropped the one-arg `revalidateTag`; `updateTag` is
+ * its Server Action replacement for immediate, read-your-own-writes invalidation). Wrapped
+ * again in React `cache()` so the several call sites in one request (personnel layout's
+ * sidebar, a page's own module gate) collapse to one call.
  */
-export async function getPersonnelPermissions(): Promise<Record<string, boolean>> {
-  const defaults = Object.fromEntries(Object.keys(PERSONNEL_MODULES).map((m) => [m, true]));
+const fetchPersonnelPermissions = unstable_cache(
+  async (): Promise<Record<string, boolean>> => {
+    const defaults = Object.fromEntries(Object.keys(PERSONNEL_MODULES).map((m) => [m, true]));
 
-  try {
-    const response = await fetch(`${authEnv.restUrl}/module_permissions?select=module,enabled`, {
-      headers: { apikey: authEnv.anonKey },
-      cache: "no-store",
-    });
-    if (!response.ok) return defaults;
+    try {
+      const response = await fetch(`${authEnv.restUrl}/module_permissions?select=module,enabled`, {
+        headers: { apikey: authEnv.anonKey },
+        cache: "no-store",
+      });
+      if (!response.ok) return defaults;
 
-    const rows = (await response.json()) as { module: string; enabled: boolean }[];
-    const result = { ...defaults };
-    for (const row of rows) {
-      if (isPersonnelModule(row.module)) result[row.module] = row.enabled;
+      const rows = (await response.json()) as { module: string; enabled: boolean }[];
+      const result = { ...defaults };
+      for (const row of rows) {
+        if (isPersonnelModule(row.module)) result[row.module] = row.enabled;
+      }
+      return result;
+    } catch {
+      return defaults;
     }
-    return result;
-  } catch {
-    return defaults;
-  }
-}
+  },
+  ["module-permissions"],
+  { tags: ["module-permissions"] }
+);
+
+export const getPersonnelPermissions = cache(fetchPersonnelPermissions);
 
 export async function isModuleEnabledForPersonnel(module: PersonnelModule): Promise<boolean> {
   const permissions = await getPersonnelPermissions();

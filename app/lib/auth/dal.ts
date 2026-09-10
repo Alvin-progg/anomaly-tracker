@@ -50,13 +50,15 @@ export const verifyIdentity = cache(async (): Promise<Session> => {
  */
 export const verifySession = cache(async (): Promise<Session> => {
   const session = await verifyIdentity();
-  const security = await getSecuritySettings();
+  const [security, passwordState] = await Promise.all([
+    getSecuritySettings(),
+    getPasswordState(session.userId),
+  ]);
 
   if (security.twoFactorEnabled && session.aal !== "aal2") {
     redirect("/login");
   }
 
-  const passwordState = await getPasswordState(session.userId);
   if (isPasswordChangeRequired(passwordState, security.passwordExpiryDays)) {
     redirect("/change-password");
   }

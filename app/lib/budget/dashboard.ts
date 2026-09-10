@@ -122,21 +122,24 @@ export async function getPendingAlerts(
   accessToken: string,
   limit: number
 ): Promise<{ alerts: AnomalyAlert[]; pendingCount: number }> {
-  const rows = await query<{
-    id: string;
-    alert_ref: string;
-    alert_type: string;
-    record_ref: string;
-    description: string;
-    confidence: number;
-    severity: AnomalyAlert["severity"];
-    status: string;
-    detected_at: string;
-    departments: { name: string } | null;
-  }>(
-    accessToken,
-    `anomaly_alerts?select=*,departments(name)&status=eq.Pending&order=detected_at.desc&limit=${limit}`
-  );
+  const [rows, pendingCount] = await Promise.all([
+    query<{
+      id: string;
+      alert_ref: string;
+      alert_type: string;
+      record_ref: string;
+      description: string;
+      confidence: number;
+      severity: AnomalyAlert["severity"];
+      status: string;
+      detected_at: string;
+      departments: { name: string } | null;
+    }>(
+      accessToken,
+      `anomaly_alerts?select=*,departments(name)&status=eq.Pending&order=detected_at.desc&limit=${limit}`
+    ),
+    countPendingAlerts(accessToken),
+  ]);
 
   const alerts = rows.map((row) => ({
     id: row.id,
@@ -151,7 +154,7 @@ export async function getPendingAlerts(
     detectedAt: row.detected_at,
   }));
 
-  return { alerts, pendingCount: await countPendingAlerts(accessToken) };
+  return { alerts, pendingCount };
 }
 
 /**

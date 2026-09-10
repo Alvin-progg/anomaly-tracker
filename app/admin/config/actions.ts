@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { verifySession } from "@/app/lib/auth/dal";
 import { getAccessToken } from "@/app/lib/auth/session";
 import { recordAuditEvent } from "@/app/lib/tracking/tracking";
@@ -257,6 +257,7 @@ export async function createFundClassificationAction(
   });
 
   revalidatePath("/admin/config");
+  updateTag("fund-classifications");
   return {};
 }
 
@@ -288,6 +289,7 @@ export async function updateFundClassificationAction(
   });
 
   revalidatePath("/admin/config");
+  updateTag("fund-classifications");
   return {};
 }
 
@@ -316,4 +318,5 @@ export async function toggleFundClassificationActiveAction(formData: FormData): 
   });
 
   revalidatePath("/admin/config");
+  updateTag("fund-classifications");
 }
